@@ -1,2 +1,79 @@
-<h1>PDF Toolbox</h1>
-<nav><button>Compress</button><button>Merge</button><button>Images to PDF</button></nav>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Toolbox</title>
+<link rel="stylesheet" href="/static/style.css">
+
+<header>
+  <h1>PDF Toolbox</h1>
+  <p class="sub">Compression tuned to stay printable and legible.</p>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab is-active" data-tab="compress" role="tab">Compress</button>
+  <button class="tab" data-tab="merge" role="tab">Merge</button>
+  <button class="tab" data-tab="images" role="tab">Images to PDF</button>
+</nav>
+
+<section class="panel is-active" id="panel-compress">
+  <div class="drop" data-drop="compress">
+    <input type="file" id="compress-input" accept="application/pdf" multiple hidden>
+    <p>Drop PDFs here or <button class="link" data-pick="compress-input">choose files</button></p>
+  </div>
+  <ul class="filelist" id="compress-list"></ul>
+  <fieldset class="presets">
+    <legend>Compression level</legend>
+    <label><input type="radio" name="compress-preset" value="print300" checked>
+      <span>Print 300 dpi</span><small>Safe for commercial print</small></label>
+    <label><input type="radio" name="compress-preset" value="print200">
+      <span>Print 200 dpi</span><small>Legible on any office printer</small></label>
+    <label><input type="radio" name="compress-preset" value="screen150">
+      <span>Screen 150 dpi</span><small class="warn">Not for print</small></label>
+    <label><input type="radio" name="compress-preset" value="lossless">
+      <span>Lossless</span><small>Structure only, images untouched</small></label>
+  </fieldset>
+  <div class="actions">
+    <button class="primary" id="compress-run" disabled>Compress</button>
+    <a class="zip" id="compress-zip" hidden>Download all (.zip)</a>
+  </div>
+  <ul class="results" id="compress-results"></ul>
+</section>
+
+<section class="panel" id="panel-merge">
+  <div class="drop" data-drop="merge">
+    <input type="file" id="merge-input" accept="application/pdf" multiple hidden>
+    <p>Drop PDFs here or <button class="link" data-pick="merge-input">choose files</button></p>
+  </div>
+  <p class="hint">Pages are merged top to bottom. Reorder with the arrows.</p>
+  <ul class="filelist" id="merge-list"></ul>
+  <label class="check"><input type="checkbox" id="merge-compress"> Compress the result</label>
+  <fieldset class="presets" id="merge-presets" hidden>
+    <legend>Compression level</legend>
+    <label><input type="radio" name="merge-preset" value="print300" checked>
+      <span>Print 300 dpi</span></label>
+    <label><input type="radio" name="merge-preset" value="print200">
+      <span>Print 200 dpi</span></label>
+    <label><input type="radio" name="merge-preset" value="screen150">
+      <span>Screen 150 dpi</span><small class="warn">Not for print</small></label>
+    <label><input type="radio" name="merge-preset" value="lossless">
+      <span>Lossless</span></label>
+  </fieldset>
+  <div class="actions">
+    <button class="primary" id="merge-run" disabled>Merge</button>
+  </div>
+  <ul class="results" id="merge-results"></ul>
+</section>
+
+<section class="panel" id="panel-images">
+  <div class="drop" data-drop="images">
+    <input type="file" id="images-input" accept="image/png,image/jpeg,image/webp" multiple hidden>
+    <p>Drop PNG, JPEG or WebP here or <button class="link" data-pick="images-input">choose files</button></p>
+  </div>
+  <p class="hint">One image per page, page sized from the image. Reorder with the arrows.</p>
+  <ul class="filelist" id="images-list"></ul>
+  <div class="actions">
+    <button class="primary" id="images-run" disabled>Build PDF</button>
+  </div>
+  <ul class="results" id="images-results"></ul>
+</section>
+
+<script src="/static/app.js"></script>

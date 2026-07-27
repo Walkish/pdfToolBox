@@ -370,3 +370,16 @@ def test_a_tool_error_does_not_leak_the_internal_on_disk_path(
     # under a job's own temp directory; neither should reach the client.
     assert "000_trunc.pdf" not in result["error"]
     assert "/inputs/" not in result["error"]
+
+
+def test_index_wires_up_the_assets_and_the_print_warning_copy(client):
+    body = client.get("/").get_data(as_text=True)
+    assert "/static/app.js" in body
+    assert "/static/style.css" in body
+    # The screen preset must be visibly marked as unsuitable for printing.
+    assert "not for print" in body.lower()
+
+
+def test_static_assets_are_served(client):
+    for path in ("/static/app.js", "/static/style.css"):
+        assert client.get(path).status_code == 200
