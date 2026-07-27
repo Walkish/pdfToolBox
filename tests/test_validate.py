@@ -50,3 +50,29 @@ def test_a_jpeg_named_png_is_rejected(jpeg_300dpi):
     with pytest.raises(validate.ValidationError) as excinfo:
         validate.validate_image_file(jpeg_300dpi, "mislabelled.png")
     assert "does not match" in str(excinfo.value)
+
+
+def test_an_empty_pdf_file_is_rejected(tmp_path):
+    empty = tmp_path / "doc.pdf"
+    empty.write_bytes(b"")
+    with pytest.raises(validate.ValidationError) as excinfo:
+        validate.validate_pdf_file(empty, "doc.pdf")
+    assert "empty" in str(excinfo.value)
+
+
+def test_an_empty_image_file_is_rejected(tmp_path):
+    empty = tmp_path / "a.png"
+    empty.write_bytes(b"")
+    with pytest.raises(validate.ValidationError) as excinfo:
+        validate.validate_image_file(empty, "a.png")
+    assert "empty" in str(excinfo.value)
+
+
+def test_a_file_exactly_at_the_size_limit_is_accepted(tmp_path, monkeypatch):
+    monkeypatch.setattr(validate, "MAX_FILE_BYTES", 20)
+    header = b"%PDF-1.7\n"
+    at_limit = tmp_path / "doc.pdf"
+    at_limit.write_bytes(header + b"x" * (20 - len(header)))
+    assert at_limit.stat().st_size == 20
+    # Must not raise: a file exactly at the limit is not "too large".
+    validate.validate_pdf_file(at_limit, "doc.pdf")

@@ -17,6 +17,21 @@ DEFAULT_TTL_SECONDS = 3600
 _BASE_PREFIX = "pdftoolbox-"
 
 
+def _safe_arcname(display_name: str) -> str:
+    """Reduce a display name to a bare filename safe for use as a zip member.
+
+    Display names are meant to echo a client-supplied upload filename and must
+    never be trusted as a path: zip_outputs presents a flat namespace, so any
+    directory separators or ".." segments are stripped down to the final path
+    component here, at the point the untrusted archive is built, rather than
+    relying on the caller to have sanitized it first.
+    """
+    candidate = Path(display_name.replace("\\", "/")).name
+    if candidate in ("", ".", ".."):
+        candidate = "file"
+    return candidate
+
+
 class Job:
     """One request's inputs, outputs, and previews."""
 
@@ -54,7 +69,7 @@ class Job:
         used = set()
         with zipfile.ZipFile(str(archive), "w", zipfile.ZIP_DEFLATED) as zipped:
             for entry in self._outputs:
-                name = entry["display_name"]
+                name = _safe_arcname(entry["display_name"])
                 if name in used:
                     stem = Path(name).stem
                     suffix = Path(name).suffix
@@ -89,7 +104,12 @@ class JobStore:
         return self._jobs[job_id]
 
     def cleanup_expired(self) -> int:
-        """Delete job directories older than the TTL. Returns how many went."""
+        """Delete directories older than the TTL: tracked jobs and orphans alike.
+
+        Returns the total number of directories removed, including both jobs
+        still in the registry and directories left behind by a previous
+        process run that this instance never registered.
+        """
         cutoff = time.time() - self.ttl_seconds
         removed = 0
         for job_id, job in list(self._jobs.items()):
@@ -108,6 +128,7 @@ class JobStore:
                 try:
                     if path.stat().st_mtime < cutoff:
                         shutil.rmtree(str(path), ignore_errors=True)
+                        removed += 1
                 except OSError:
                     continue
         return removed
