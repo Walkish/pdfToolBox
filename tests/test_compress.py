@@ -15,6 +15,24 @@ def image_ppi_values(pdf_path):
     return [image.ppi for image in parse_pdfimages_list(listing) if image.ppi is not None]
 
 
+def image_encodings(pdf_path):
+    """The `enc` column of every image row in `pdfimages -list` output.
+
+    Poppler reports "jpeg" for a DCT-encoded image and "image" for a raw or
+    Flate one, so this is the direct measurement of whether a lossless source
+    was re-encoded lossily.
+    """
+    listing = subprocess.run(
+        ["pdfimages", "-list", str(pdf_path)], capture_output=True, text=True, timeout=120
+    ).stdout
+    encodings = []
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) >= 16 and fields[0].isdigit():
+            encodings.append(fields[8])
+    return encodings
+
+
 def test_every_preset_is_registered_under_its_own_id():
     for preset_id, preset in compress.PRESETS.items():
         assert preset.id == preset_id
@@ -55,6 +73,35 @@ def test_command_omits_resampling_for_the_lossless_preset(tmp_path):
     )
     assert not any(part.startswith("-dColorImageResolution") for part in command)
     assert "-c" not in command
+
+
+def test_the_skip_resample_leg_of_a_print_preset_keeps_the_lossless_filters(tmp_path):
+    """Guardrail (a) turns resampling off for a source already at or below the
+    target, which runs a *print* preset through the no-resample path. That is
+    a different code path from the ``lossless`` preset, and it needs the same
+    explicit filter policy: Ghostscript's AutoFilterColorImages/GrayImages
+    default to true, so leaving this leg on the defaults silently re-encodes a
+    Flate scan as JPEG while the row still claims "only the file structure was
+    recompressed". Measured on the regressed build: 418322 -> 90493 bytes, enc
+    "image" -> "jpeg". No existing test covered ``resample=False`` on a
+    resampling preset, so the regression passed 123/123.
+    """
+    command = compress.build_command(
+        tmp_path / "in.pdf",
+        tmp_path / "out.pdf",
+        compress.PRESETS["print300"],
+        resample=False,
+    )
+    for flag in (
+        "-dAutoFilterColorImages=false",
+        "-dAutoFilterGrayImages=false",
+        "-dColorImageFilter=/FlateEncode",
+        "-dGrayImageFilter=/FlateEncode",
+        "-dPassThroughJPEGImages=true",
+    ):
+        assert flag in command
+    assert "-dColorImageFilter=/DCTEncode" not in command
+    assert "-dGrayImageFilter=/DCTEncode" not in command
 
 
 def test_command_never_uses_a_shell_string(tmp_path):
@@ -265,3 +312,121 @@ def test_lossless_preset_does_not_jpeg_encode_a_flate_source(flate_gray_pdf, tmp
         timeout=120,
     ).stdout
     assert "jpeg" not in listing_after.lower()
+
+
+# --- Final review -------------------------------------------------------
+# The below-floor guardrail is now derived from the *measured* output rather
+# than from the preset's target, which is the only way it can see a scan
+# whose pages carry different resolutions; and the skip-resample filter
+# policy gets a direct test on both its legs.
+
+
+def test_a_flate_source_at_the_target_is_not_jpeg_encoded_by_a_print_preset(
+    flate_gray_pdf, tmp_path
+):
+    """The end-to-end half of the skip-resample filter policy: a 150 dpi Flate
+    scan through ``print300`` takes guardrail (a)'s no-resample path, and must
+    come back with its lossless encoding intact. On the regressed build this
+    returned a 90493-byte file whose image encoding was "jpeg".
+    """
+    assert "jpeg" not in image_encodings(flate_gray_pdf)
+
+    destination = tmp_path / "out.pdf"
+    result = compress.compress_pdf(flate_gray_pdf, destination, "print300")
+
+    assert result.resampled is False
+    assert "jpeg" not in image_encodings(destination)
+
+
+def test_a_mixed_resolution_scan_is_judged_by_its_worst_page(
+    mixed_resolution_scan_pdf, tmp_path
+):
+    """A 600 dpi page next to a 100 dpi page, through the *default* preset.
+
+    ``max_ppi`` is 600, so resampling proceeds and the preset's own target
+    (300) is comfortably above the floor -- but the 100 dpi page is never
+    touched and lands in the output as-is. Measured on the pre-fix build:
+    output page 2 at 100 dpi with ``warnings: []``. The measured output is
+    what the guardrail has to answer to, so assert the real per-page ppi as
+    well as the warning.
+    """
+    destination = tmp_path / "out.pdf"
+    result = compress.compress_pdf(mixed_resolution_scan_pdf, destination, "print300")
+
+    ppi_values = image_ppi_values(destination)
+    assert len(ppi_values) == 2
+    assert max(ppi_values) <= 345
+    assert min(ppi_values) <= 110
+
+    assert result.below_print_floor is True
+    floor_warnings = [
+        warning
+        for warning in result.warnings
+        if str(compress.PRINT_DPI_FLOOR) in warning
+    ]
+    assert len(floor_warnings) == 1
+    assert "100 dpi" in floor_warnings[0]
+
+
+def test_a_uniform_600dpi_scan_through_print300_stays_above_the_floor(
+    scan_pdf_600dpi, tmp_path
+):
+    """The other side of the measurement: every page really does land above
+    the floor, so nothing is reported."""
+    destination = tmp_path / "out.pdf"
+    result = compress.compress_pdf(scan_pdf_600dpi, destination, "print300")
+
+    for ppi in image_ppi_values(destination):
+        assert ppi >= compress.PRINT_DPI_FLOOR
+    assert result.below_print_floor is False
+    assert not any(
+        str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings
+    )
+
+
+def test_the_below_floor_warning_offers_the_next_preset_up(scan_pdf_600dpi, tmp_path):
+    """design.md requires the warning to name the resulting dpi *and* the next
+    preset up. Here the preset's own 150 dpi target is what put the output
+    below the floor, so re-running at Print 200 dpi genuinely fixes it."""
+    result = compress.compress_pdf(scan_pdf_600dpi, tmp_path / "out.pdf", "screen150")
+    floor_warnings = [
+        warning
+        for warning in result.warnings
+        if str(compress.PRINT_DPI_FLOOR) in warning
+    ]
+    assert len(floor_warnings) == 1
+    assert "150 dpi" in floor_warnings[0]
+    assert compress.PRESETS["print200"].label in floor_warnings[0]
+
+
+def test_a_genuinely_low_resolution_scan_is_not_offered_a_higher_preset(
+    scan_pdf_150dpi, tmp_path
+):
+    """A source that was already at 150 dpi cannot be rescued by a higher
+    target -- Ghostscript never upsamples -- so the advice must not appear."""
+    result = compress.compress_pdf(scan_pdf_150dpi, tmp_path / "out.pdf", "screen150")
+    floor_warnings = [
+        warning
+        for warning in result.warnings
+        if str(compress.PRINT_DPI_FLOOR) in warning
+    ]
+    assert len(floor_warnings) == 1
+    assert compress.PRESETS["print200"].label not in floor_warnings[0]
+    assert "Re-run at" not in floor_warnings[0]
+
+
+def test_the_returned_original_row_does_not_contradict_itself(flate_gray_pdf, tmp_path):
+    """Measured on the pre-fix build, an ordinary 150 dpi Flate scan through
+    the default preset produced three warnings at once, the first two of which
+    contradict each other: "only the file structure was recompressed" describes
+    a rewrite that the returned-original guardrail then threw away.
+    """
+    result = compress.compress_pdf(flate_gray_pdf, tmp_path / "out.pdf", "print300")
+    assert result.returned_original is True
+
+    joined = " ".join(result.warnings)
+    assert "original was kept unchanged" in joined
+    assert "file structure was recompressed" not in joined
+    # Exactly the two that describe this file: kept unchanged, and below floor.
+    assert len(result.warnings) == 2
+    assert result.below_print_floor is True

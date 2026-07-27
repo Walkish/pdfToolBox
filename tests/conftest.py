@@ -77,6 +77,34 @@ def scan_pdf_150dpi(tmp_path):
 
 
 @pytest.fixture
+def mixed_resolution_scan_pdf(tmp_path):
+    """A two-page scan whose pages were captured at different resolutions.
+
+    Page 1 is a 600 dpi raster, well above any preset's target; page 2 is a
+    100 dpi raster, well below the print floor -- the shape of a scanned
+    bundle where one sheet arrived from a fax, a phone photo, or an
+    already-downsampled PDF. Both pages are full-page images, so both count
+    as scan pages, and the document's single "max ppi" of 600 says nothing
+    at all about what page 2 will look like afterwards.
+    """
+    pages = []
+    for dpi in (600, 100):
+        image = _render_text_page(5 * dpi, 7 * dpi, mode="L")
+        pages.append(
+            _save_image_pdf(image, tmp_path / "_mixed_{0}.pdf".format(dpi), dpi)
+        )
+
+    writer = PdfWriter()
+    for page_pdf in pages:
+        writer.add_page(PdfReader(str(page_pdf)).pages[0])
+
+    path = tmp_path / "mixed_resolution_scan.pdf"
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+@pytest.fixture
 def cmyk_pdf(tmp_path):
     """A CMYK page, to prove the colour space survives compression."""
     image = _render_text_page(1000, 1400, mode="RGB").convert("CMYK")

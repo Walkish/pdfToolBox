@@ -200,6 +200,48 @@ def _extracted_text(path: Path) -> str:
     return _run([binaries.find("pdftotext"), str(path), "-"], path)
 
 
+def scan_floor_ppi(path) -> Optional[float]:
+    """The lowest resolution a reader will actually meet in ``path``: the
+    minimum ppi among its *scan pages*.
+
+    This exists to be run on a finished file, because predicting a
+    compressed PDF's resolution from the preset that produced it does not
+    work. Ghostscript only downsamples an image that exceeds the target by
+    its DownsampleThreshold (1.5), so a 200 dpi image survives a 150 dpi
+    target untouched; and a scanned bundle whose pages came from different
+    devices has no single resolution at all -- one page at 600 dpi and one
+    at 100 dpi through a 300 dpi target leaves the second page at 100 dpi.
+    Measuring answers both questions and assumes nothing.
+
+    Only images covering at least ``SCAN_COVERAGE_THRESHOLD`` of their page
+    count: those are the pages whose image resolution *is* their text
+    resolution. A small low-resolution thumbnail on one page of an otherwise
+    sharp document is not what the reader has to read, and counting it would
+    raise a false alarm.
+
+    Returns None when the file has no such page (a born-digital document, or
+    one with no raster images at all).
+    """
+    path = Path(path)
+    images = parse_pdfimages_list(
+        _run([binaries.find("pdfimages"), "-list", str(path)], path)
+    )
+    last_page_with_image = max((image.page for image in images), default=0)
+    if last_page_with_image <= 0:
+        return None
+    # Only pages that carry an image need their size, so the page range stops
+    # at the last such page rather than covering the whole document.
+    page_sizes = _page_sizes(path, last_page_with_image)
+    scan_page_ppi = [
+        measured.ppi
+        for measured in (_with_coverage(image, page_sizes) for image in images)
+        if measured.ppi is not None
+        and measured.coverage is not None
+        and measured.coverage >= SCAN_COVERAGE_THRESHOLD
+    ]
+    return min(scan_page_ppi) if scan_page_ppi else None
+
+
 def profile_pdf(path) -> PdfProfile:
     """Inspect ``path`` and return everything the compressor needs to decide."""
     path = Path(path)

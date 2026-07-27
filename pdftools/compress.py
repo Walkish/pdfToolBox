@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 
 from . import binaries
 from .errors import ToolError
-from .inspect import PdfProfile, profile_pdf
+from .inspect import PdfProfile, profile_pdf, scan_floor_ppi
 
 # Body text at 10-11 pt stays cleanly legible in print down to this
 # resolution; below it, letter strokes start merging.
@@ -81,6 +81,10 @@ class CompressResult:
     resampled: bool
     returned_original: bool
     source_ppi: Optional[float]
+    # True when the *finished* file's own scan pages measure below
+    # PRINT_DPI_FLOOR. The machine-readable form of the warning below, so a
+    # UI can flag the print risk without parsing English prose.
+    below_print_floor: bool
     warnings: List[str]
 
     @property
@@ -179,6 +183,53 @@ def build_command(src, dst, preset: Preset, resample: bool = True) -> List[str]:
     return command
 
 
+def _next_preset_up(preset: Preset) -> Optional[Preset]:
+    """The next print-safer rung above ``preset``: the resampling preset with
+    the smallest target above this one's.
+
+    ``lossless`` is not a rung on that ladder -- it has no target at all --
+    and the top rung has nothing above it, so both return None.
+    """
+    if preset.image_dpi is None:
+        return None
+    higher = [
+        candidate
+        for candidate in PRESETS.values()
+        if candidate.image_dpi is not None and candidate.image_dpi > preset.image_dpi
+    ]
+    if not higher:
+        return None
+    return min(higher, key=lambda candidate: candidate.image_dpi)
+
+
+def _below_floor_warning(output_ppi: float, preset: Preset, resampled: bool) -> str:
+    """The below-floor warning, naming the measured dpi and -- where it would
+    actually help -- the preset to re-run at."""
+    message = (
+        "This looks like a scan at about {0} dpi, below the {1} dpi print "
+        "floor most printers need for small text to stay legible.".format(
+            int(round(output_ppi)), PRINT_DPI_FLOOR
+        )
+    )
+    # Offering a higher preset only helps when this preset's target is what
+    # pinned the resolution down. Ghostscript never downsamples an image
+    # *below* the target, so a measured floor materially under the target came
+    # from the source -- a page that arrived low-resolution, which no preset
+    # can restore. Saying "use a higher setting" there would be false advice.
+    target_set_the_floor = (
+        resampled
+        and preset.image_dpi is not None
+        and output_ppi >= preset.image_dpi * 0.95
+    )
+    if target_set_the_floor:
+        higher = _next_preset_up(preset)
+        if higher is not None:
+            message += " Re-run at {0} or higher to stay above the floor.".format(
+                higher.label
+            )
+    return message
+
+
 def _timeout_stderr(exc) -> str:
     stderr = getattr(exc, "stderr", None)
     if isinstance(stderr, bytes):
@@ -227,17 +278,16 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
 
     warnings = []
     resample = preset.image_dpi is not None
+    skipped_at_target = False
 
     if resample and source.max_ppi is not None and source.max_ppi <= preset.image_dpi:
         # Nothing exceeds the target, so resampling would only re-encode.
         # The file is still rewritten below -- just without downsampling --
-        # so this must not claim the images were left untouched.
+        # so this must not claim the images were left untouched. The wording
+        # is only appended after the run, because the returned-original
+        # guardrail can throw that rewrite away entirely.
         resample = False
-        warnings.append(
-            "Source images are already at {0} dpi, at or below the {1} dpi "
-            "target, so they were not downsampled -- only the file structure "
-            "was recompressed.".format(int(round(source.max_ppi)), preset.image_dpi)
-        )
+        skipped_at_target = True
 
     command = build_command(src, dst, preset, resample=resample)
     try:
@@ -277,18 +327,31 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
             "Already optimised: compression produced a larger file, so the "
             "original was kept unchanged."
         )
-
-    # Compute the below-floor warning from what the output *actually* is,
-    # not from the pre-run intent: if resampling was skipped or discarded
-    # above, the image resolution the reader will see is the source's, not
-    # the preset's target.
-    effective_dpi = preset.image_dpi if resample else source.max_ppi
-    if source.is_scan and effective_dpi is not None and effective_dpi < PRINT_DPI_FLOOR:
+        # The "only the file structure was recompressed" note describes the
+        # rewrite that was just discarded, so reporting it next to "the
+        # original was kept unchanged" would state two contradictory things
+        # about the same file. Free-text warnings are the only channel the
+        # print guarantee has; a reader trained to skim them loses it.
+    elif skipped_at_target:
         warnings.append(
-            "This looks like a scan at about {0} dpi, below the {1} dpi "
-            "print floor most printers need for small text to stay "
-            "legible.".format(int(round(effective_dpi)), PRINT_DPI_FLOOR)
+            "Source images are already at {0} dpi, at or below the {1} dpi "
+            "target, so they were not downsampled -- only the file structure "
+            "was recompressed.".format(int(round(source.max_ppi)), preset.image_dpi)
         )
+
+    # Measure the finished file instead of predicting it from the preset.
+    # Everything a prediction has to assume -- that Ghostscript reached the
+    # target, that one number describes every page -- is exactly what has
+    # gone wrong here before: a two-page bundle at 600 and 100 dpi through
+    # print300 leaves page 2 at 100 dpi, which no preset-derived number sees.
+    output_floor_ppi = scan_floor_ppi(dst)
+    below_print_floor = (
+        source.is_scan
+        and output_floor_ppi is not None
+        and output_floor_ppi < PRINT_DPI_FLOOR
+    )
+    if below_print_floor:
+        warnings.append(_below_floor_warning(output_floor_ppi, preset, resample))
 
     return CompressResult(
         output_path=dst,
@@ -298,5 +361,6 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
         resampled=resample,
         returned_original=returned_original,
         source_ppi=source.median_ppi,
+        below_print_floor=below_print_floor,
         warnings=warnings,
     )
