@@ -8,6 +8,7 @@ import random
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
+from pypdf import PdfReader, PdfWriter
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -107,8 +108,14 @@ def _build_pdf_bytes(objects):
     return bytes(out)
 
 
-def _vector_pdf(path, markers):
-    """Build a PDF with one page per marker, each holding real Helvetica text."""
+def _vector_pdf(path, markers, page_size=(612, 792)):
+    """Build a PDF with one page per marker, each holding real Helvetica text.
+
+    ``page_size`` is (width, height) in points. Pass the same size as any
+    raster page this will be combined with, so image-coverage math (image
+    area over page area) stays meaningful.
+    """
+    page_width, page_height = page_size
     page_count = len(markers)
     font_number = 3 + 2 * page_count
     kids = " ".join("{0} 0 R".format(3 + 2 * index) for index in range(page_count))
@@ -117,19 +124,23 @@ def _vector_pdf(path, markers):
         b"<< /Type /Catalog /Pages 2 0 R >>",
         "<< /Type /Pages /Kids [{0}] /Count {1} >>".format(kids, page_count).encode("ascii"),
     ]
+    # Same offsets from the top as the original hard-coded 612x792 layout
+    # (792 - 92 = 700, 792 - 132 = 660), so smaller pages keep the text on-page.
+    top_y = page_height - 92
+    body_y = page_height - 132
     for index, marker in enumerate(markers):
         page_number = 3 + 2 * index
         content_number = page_number + 1
         objects.append(
             (
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {2} {3}] "
                 "/Resources << /Font << /F1 {0} 0 R >> >> /Contents {1} 0 R >>"
-            ).format(font_number, content_number).encode("ascii")
+            ).format(font_number, content_number, page_width, page_height).encode("ascii")
         )
         stream = (
-            "BT /F1 24 Tf 72 700 Td ({0}) Tj ET\n"
-            "BT /F1 11 Tf 72 660 Td (Vector body text that must stay sharp.) Tj ET\n"
-        ).format(marker).encode("ascii")
+            "BT /F1 24 Tf 72 {1:.0f} Td ({0}) Tj ET\n"
+            "BT /F1 11 Tf 72 {2:.0f} Td (Vector body text that must stay sharp.) Tj ET\n"
+        ).format(marker, top_y, body_y).encode("ascii")
         objects.append(
             "<< /Length {0} >>\nstream\n".format(len(stream)).encode("ascii")
             + stream
@@ -162,6 +173,64 @@ def vector_pdf_factory(tmp_path):
 def tiny_pdf(tmp_path):
     """A one-page text-only PDF that Ghostscript cannot make smaller."""
     return _vector_pdf(tmp_path / "tiny.pdf", ["TINY"])
+
+
+# Page size (points) shared by the OCR and mixed fixtures below, matching the
+# 5x7 inch physical size of the raster pages they are combined with.
+_OCR_PAGE_SIZE = (360, 504)
+
+
+@pytest.fixture
+def ocr_scan_pdf(tmp_path):
+    """A scanned page that has already been OCR'd.
+
+    It carries a full-page raster image (so it looks like a scan) *and* a
+    genuine, extractable text layer overlaid on top of it (as real OCR
+    software would add). This is the case scan detection must not miss.
+    """
+    image = _render_text_page(5 * 300, 7 * 300, mode="L")
+    image_path = _save_image_pdf(image, tmp_path / "_ocr_image.pdf", 300)
+    text_path = _vector_pdf(
+        tmp_path / "_ocr_text.pdf", ["OCR-LAYER"], page_size=_OCR_PAGE_SIZE
+    )
+
+    text_page = PdfReader(str(text_path)).pages[0]
+
+    writer = PdfWriter()
+    writer.append(str(image_path))
+    # Attach the page to the writer before merging onto it: merging into a
+    # page that isn't yet owned by a writer is deprecated in pypdf.
+    writer.pages[0].merge_page(text_page)
+
+    path = tmp_path / "ocr_scan.pdf"
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+@pytest.fixture
+def mixed_scan_and_text_pdf(tmp_path):
+    """Two ordinary text pages followed by one full-page scanned image page.
+
+    Mostly a text document, with one page that is a genuine scan -- this
+    exercises the "most pages must be scan pages" fraction rather than a
+    "does any page look like a scan" check.
+    """
+    text_path = _vector_pdf(
+        tmp_path / "_mixed_text.pdf", ["MARKER-1", "MARKER-2"], page_size=_OCR_PAGE_SIZE
+    )
+    image = _render_text_page(5 * 300, 7 * 300, mode="L")
+    image_path = _save_image_pdf(image, tmp_path / "_mixed_image.pdf", 300)
+
+    writer = PdfWriter()
+    for page in PdfReader(str(text_path)).pages:
+        writer.add_page(page)
+    writer.add_page(PdfReader(str(image_path)).pages[0])
+
+    path = tmp_path / "mixed.pdf"
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
 
 
 @pytest.fixture
