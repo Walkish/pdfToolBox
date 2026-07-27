@@ -16,7 +16,15 @@ from .errors import ToolError
 from .inspect import PdfProfile, profile_pdf
 
 PREVIEW_DPI = 150
-CROP_SIZE = (900, 600)
+# Both crops are shown side by side at 1:1, so two of these plus the gap
+# between them must fit the width the page gives .pair in static/style.css:
+# a 900 px body, less its 20 px padding either side, less .result's 14 px
+# either side, leaves about 832 px. Two 400 px columns and a 16 px gap fit;
+# anything wider makes .pair scroll horizontally, and a comparison you have
+# to scroll between is not a comparison. At 150 dpi, 400x560 px is still
+# about 2.7 x 3.7 inches of body text -- enough to judge legibility.
+# Keep this in step with `body { max-width }` and `.pair { gap }`.
+CROP_SIZE = (400, 560)
 # Body text usually starts about a fifth of the way down a page.
 _CROP_TOP_FRACTION = 0.22
 
@@ -38,9 +46,20 @@ def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:
         str(pdf_path),
         str(out_prefix),
     ]
-    completed = subprocess.run(
-        command, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS
-    )
+    try:
+        completed = subprocess.run(
+            command, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Every other shell-out in this package converts a timeout into a
+        # ToolError; without this a 120 s pdftoppm on a huge page reaches the
+        # route as a raw TimeoutExpired and answers a generic HTTP 500.
+        raise ToolError(
+            "pdftoppm timed out after {0}s rendering page {1} of {2}".format(
+                binaries.TIMEOUT_SECONDS, page, Path(pdf_path).name
+            ),
+            stderr=str(exc),
+        ) from exc
     # pdftoppm appends ".png" to the prefix string literally -- it does not
     # replace an existing suffix the way Path.with_suffix does. A prefix
     # basename containing a dot (e.g. "page.v1") is written as "page.v1.png",
@@ -88,15 +107,26 @@ def build_comparison(src_pdf, out_pdf, dest_dir, page: Optional[int] = None) -> 
         before_png = render_page(src_pdf, page, PREVIEW_DPI, dest_dir / "before_full")
         after_png = render_page(out_pdf, page, PREVIEW_DPI, dest_dir / "after_full")
 
-        with Image.open(str(before_png)) as before, Image.open(str(after_png)) as after:
-            # Rounding can make the two renders differ by a pixel; crop to the
-            # smaller of the two so the pair stays directly comparable.
-            common = (min(before.width, after.width), min(before.height, after.height))
-            box = crop_box(common, CROP_SIZE)
-            before_crop = dest_dir / "before.png"
-            after_crop = dest_dir / "after.png"
-            before.crop(box).save(str(before_crop), "PNG")
-            after.crop(box).save(str(after_crop), "PNG")
+        try:
+            with Image.open(str(before_png)) as before, Image.open(str(after_png)) as after:
+                # Rounding can make the two renders differ by a pixel; crop to
+                # the smaller of the two so the pair stays directly comparable.
+                common = (
+                    min(before.width, after.width),
+                    min(before.height, after.height),
+                )
+                box = crop_box(common, CROP_SIZE)
+                before_crop = dest_dir / "before.png"
+                after_crop = dest_dir / "after.png"
+                before.crop(box).save(str(before_crop), "PNG")
+                after.crop(box).save(str(after_crop), "PNG")
+        # Pillow raised nothing typed here before, so a render too large for
+        # its own limits, or a disk error writing the crops, surfaced as a raw
+        # traceback and a generic HTTP 500 instead of a reportable failure.
+        except (OSError, ValueError, Image.DecompressionBombError) as exc:
+            raise ToolError(
+                "Could not crop the comparison for page {0}: {1}".format(page, exc)
+            ) from exc
     finally:
         # These are intermediate full-page renders, not the function's
         # return values -- remove them whether we succeeded or raised partway

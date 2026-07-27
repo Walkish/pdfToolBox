@@ -17,14 +17,16 @@ DEFAULT_TTL_SECONDS = 3600
 _BASE_PREFIX = "pdftoolbox-"
 
 
-def _safe_arcname(display_name: str) -> str:
-    """Reduce a display name to a bare filename safe for use as a zip member.
+def safe_display_name(display_name: str) -> str:
+    """Reduce a display name to a bare filename, safe to hand to a client.
 
     Display names are meant to echo a client-supplied upload filename and must
     never be trusted as a path: zip_outputs presents a flat namespace, so any
     directory separators or ".." segments are stripped down to the final path
     component here, at the point the untrusted archive is built, rather than
-    relying on the caller to have sanitized it first.
+    relying on the caller to have sanitized it first. The same normalization
+    serves a ``Content-Disposition`` filename on a download, which is the same
+    untrusted value going out through a different channel.
     """
     candidate = Path(display_name.replace("\\", "/")).name
     if candidate in ("", ".", ".."):
@@ -69,7 +71,7 @@ class Job:
         used = set()
         with zipfile.ZipFile(str(archive), "w", zipfile.ZIP_DEFLATED) as zipped:
             for entry in self._outputs:
-                name = _safe_arcname(entry["display_name"])
+                name = safe_display_name(entry["display_name"])
                 if name in used:
                     stem = Path(name).stem
                     suffix = Path(name).suffix
@@ -123,7 +125,16 @@ class JobStore:
                 self._jobs.pop(job_id, None)
                 removed += 1
         # Directories left behind by a previous process run.
-        for path in self.base_dir.iterdir():
+        try:
+            leftovers = list(self.base_dir.iterdir())
+        except OSError:
+            # macOS periodically sweeps $TMPDIR, so the base directory can
+            # vanish under a long-running process. Unguarded, that turns
+            # every later request into a 500 from in here; recreating it
+            # leaves the store usable and there is nothing left to expire.
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            return removed
+        for path in leftovers:
             if path.is_dir() and path.name not in self._jobs:
                 try:
                     if path.stat().st_mtime < cutoff:

@@ -1,5 +1,6 @@
 """Tests for job directories and output registration."""
 import os
+import shutil
 import time
 import zipfile
 
@@ -152,3 +153,17 @@ def test_cleanup_sweeps_aged_orphan_directories_but_keeps_fresh_ones(tmp_path):
     assert removed == 1
     assert not aged_orphan.exists()
     assert fresh_orphan.exists()
+
+
+def test_cleanup_survives_its_base_directory_being_swept_away(tmp_path):
+    """macOS sweeps $TMPDIR, so the base directory can vanish under a
+    long-running process. Unguarded, the orphan sweep's iterdir() then raised
+    FileNotFoundError and every later request 500'd from inside cleanup."""
+    store = jobs.JobStore(base_dir=tmp_path / "jobs")
+    shutil.rmtree(str(store.base_dir))
+
+    assert store.cleanup_expired() == 0
+    assert store.base_dir.is_dir()
+    # And the store is still usable afterwards.
+    job = store.create()
+    assert job.inputs.is_dir()

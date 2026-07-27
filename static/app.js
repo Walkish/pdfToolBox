@@ -113,6 +113,15 @@ function resultRow(result) {
     }
     head.appendChild(sizes);
 
+    if (result.below_print_floor === true) {
+      // The print guarantee is the point of this tool, so it gets its own
+      // badge instead of being one paragraph among unrelated notices.
+      var badge = document.createElement("span");
+      badge.className = "badge floor";
+      badge.textContent = "Below print floor";
+      head.appendChild(badge);
+    }
+
     var link = document.createElement("a");
     link.href = result.download_url;
     link.textContent = "Download";
@@ -167,11 +176,17 @@ function previewBlock(previewUrl) {
     if (!details.open || loaded) { return; }
     loaded = true;
     fetch(previewUrl).then(function (response) {
-      return response.json();
-    }).then(function (data) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    }).then(function (result) {
+      var data = result.data;
       body.textContent = "";
-      if (data.error) {
-        body.textContent = data.error;
+      if (!result.ok) {
+        // Error bodies are {error: <exception name>, description: <message>};
+        // `description` is the part worth reading.
+        body.textContent = data.description || data.error ||
+          "Could not render the comparison.";
         return;
       }
       var caption = document.createElement("p");

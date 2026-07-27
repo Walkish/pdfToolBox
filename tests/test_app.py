@@ -69,6 +69,7 @@ def test_compress_returns_sizes_and_a_download_url(client, scan_pdf_600dpi):
     assert result["name"] == "scan.pdf"
     assert result["size_after"] < result["size_before"]
     assert result["saved_pct"] > 0
+    assert result["below_print_floor"] is False
     assert result["download_url"].startswith("/jobs/")
     downloaded = client.get(result["download_url"])
     assert downloaded.status_code == 200
@@ -81,8 +82,11 @@ def test_compress_below_the_print_floor_reports_the_warning(client, scan_pdf_600
         data={"files": [upload(scan_pdf_600dpi, "scan.pdf")], "preset": "screen150"},
         content_type="multipart/form-data",
     ).get_json()
-    warnings = payload["results"][0]["warnings"]
-    assert any("200 dpi" in warning for warning in warnings)
+    result = payload["results"][0]
+    assert any("200 dpi" in warning for warning in result["warnings"])
+    # The machine-readable form of the same measurement, so the UI can badge
+    # the print risk instead of hoping the user reads the prose.
+    assert result["below_print_floor"] is True
 
 
 def test_one_bad_file_does_not_fail_the_batch(client, scan_pdf_600dpi):
@@ -387,6 +391,60 @@ def test_a_tool_error_does_not_leak_the_internal_on_disk_path(
     # under a job's own temp directory; neither should reach the client.
     assert "000_trunc.pdf" not in result["error"]
     assert "/inputs/" not in result["error"]
+
+
+def test_a_failed_preview_uses_the_standard_envelope_and_leaks_no_paths(
+    client, tmp_path, scan_pdf_600dpi
+):
+    """Measured before the fix, this route answered
+    ``500 {"error": "pdfimages exited with status 1 on
+    <tmp>/jobs/<id>/inputs/000_scan.pdf"}`` -- the only route with no
+    redaction and its own private error shape. The internal path, the
+    position prefix, and the odd envelope all had to go.
+    """
+    payload = client.post(
+        "/api/compress",
+        data={"files": [upload(scan_pdf_600dpi, "scan.pdf")], "preset": "print300"},
+        content_type="multipart/form-data",
+    ).get_json()
+    preview_url = payload["results"][0]["preview_url"]
+
+    # Break the retained source so rendering the "before" side cannot work.
+    source = tmp_path / "jobs" / payload["job_id"] / "inputs" / "000_scan.pdf"
+    assert source.exists()
+    source.write_bytes(b"%PDF-1.4\nno xref, no trailer, nothing renderable\n%%EOF")
+
+    response = client.get(preview_url)
+    assert response.status_code == 500
+    body = response.get_json()
+    # The same {error, description} envelope every other route returns.
+    assert body["error"] == "Internal Server Error"
+    assert "scan.pdf" in body["description"]
+    for field in (body["error"], body["description"]):
+        assert "000_scan.pdf" not in field
+        assert "/inputs/" not in field
+        assert str(tmp_path) not in field
+
+
+def test_an_unknown_job_preview_says_why_not_just_not_found(client):
+    """The envelope carries the reason in `description`; `error` is only the
+    exception's name, which is why the UI must read the former."""
+    response = client.get("/api/preview/deadbeef/0")
+    assert response.status_code == 404
+    assert response.get_json()["description"] == "Unknown job"
+
+
+def test_a_wrong_method_still_advertises_the_methods_it_allows(client):
+    """The JSON error handler builds its own response, which drops Werkzeug's
+    error headers. `Allow` is protocol information, not decoration: measured
+    before the fix, GET /api/compress answered 405 with no Allow header at
+    all. Content-Type must not be copied along with it -- it describes the
+    HTML body being replaced."""
+    response = client.get("/api/compress")
+    assert response.status_code == 405
+    assert "POST" in response.headers["Allow"]
+    assert response.headers["Content-Type"].startswith("application/json")
+    assert response.get_json()["description"]
 
 
 def test_an_image_bomb_fails_its_own_row_and_leaves_the_batch_alone(

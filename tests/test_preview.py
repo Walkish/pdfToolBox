@@ -1,4 +1,7 @@
 """Tests for the before/after readability comparison."""
+import re
+from pathlib import Path
+
 import pytest
 from PIL import Image
 
@@ -90,3 +93,34 @@ def test_a_failed_second_render_leaves_no_full_page_renders_behind(scan_pdf_600d
         preview.build_comparison(scan_pdf_600dpi, broken_out, dest_dir)
     leftover_full_renders = list(dest_dir.glob("*_full.png"))
     assert leftover_full_renders == []
+
+
+def test_both_crops_fit_side_by_side_at_one_to_one_in_the_real_layout():
+    """The spec's whole point is that the pair is shown side by side at 1:1
+    with no scaling. Flex items do not shrink below their intrinsic width, so
+    a crop wider than half the available column pushes the "after" image
+    behind .pair's horizontal scrollbar -- and a comparison you have to
+    scroll between is not a comparison. Measured with CROP_SIZE = (900, 600)
+    against a 900 px body: 1816 px of images into about 832 px of space.
+
+    The numbers are read out of the stylesheet so the two cannot drift apart
+    silently; if a rewrite makes these patterns stop matching, this test fails
+    loudly, which is the point.
+    """
+    style = (Path(__file__).resolve().parent.parent / "static" / "style.css").read_text()
+
+    def matched(pattern):
+        match = re.search(pattern, style, re.S)
+        assert match, "style.css no longer matches {0!r}".format(pattern)
+        return int(match.group(1))
+
+    body_max_width = matched(r"body\s*\{[^}]*max-width:\s*(\d+)px")
+    body_padding = matched(r"body\s*\{[^}]*padding:\s*\d+px\s+(\d+)px")
+    result_padding = matched(r"\.result\s*\{[^}]*padding:\s*\d+px\s+(\d+)px")
+    pair_gap = matched(r"\.pair\s*\{[^}]*gap:\s*(\d+)px")
+
+    available = body_max_width - 2 * body_padding - 2 * result_padding
+    assert 2 * preview.CROP_SIZE[0] + pair_gap <= available
+    # Still a useful amount of page: at 150 dpi this is inches of body text.
+    assert preview.CROP_SIZE[0] / float(preview.PREVIEW_DPI) >= 2.5
+    assert preview.CROP_SIZE[1] / float(preview.PREVIEW_DPI) >= 3.5

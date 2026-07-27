@@ -11,6 +11,10 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from pdftools import binaries, compress, images, jobs, merge, preview, validate
+# Imported from its own module rather than as compress.ToolError: merge,
+# images and preview raise this same class, and naming it after compress
+# implies a dependency on compress that none of them have.
+from pdftools.errors import ToolError
 
 _DEBUG_TRUE_VALUES = ("1", "true", "yes")
 
@@ -131,8 +135,10 @@ def _failure(name: str, message: str, stderr: str = "") -> Dict:
         "warnings": [],
         # None, not True: this row produced no output, so "print safe"
         # does not apply -- a UI iterating rows must not read this as a
-        # positive claim about a file that was never written.
+        # positive claim about a file that was never written. Same for the
+        # print floor: nothing was written, so nothing was measured.
         "print_safe": None,
+        "below_print_floor": None,
         "download_url": None,
         "preview_url": None,
         "error": message,
@@ -150,6 +156,9 @@ def _success(job, index: int, name: str, result: compress.CompressResult, preset
         "saved_pct": round(result.saved_ratio * 100.0, 1),
         "warnings": list(result.warnings),
         "print_safe": preset.print_safe,
+        # Measured from the finished file, so the UI can flag the print risk
+        # without parsing the warning prose.
+        "below_print_floor": result.below_print_floor,
         "download_url": "/jobs/{0}/files/{1}".format(job.id, index),
         "preview_url": "/api/preview/{0}/{1}".format(job.id, index),
         "error": None,
@@ -168,6 +177,9 @@ def _plain_success(job, index: int, name: str, path: Path) -> Dict:
         "saved_pct": 0.0,
         "warnings": [],
         "print_safe": True,
+        # None, not False: no compression ran on this file, so its resolution
+        # was never measured and this row makes no claim either way.
+        "below_print_floor": None,
         "download_url": "/jobs/{0}/files/{1}".format(job.id, index),
         "preview_url": None,
         "error": None,
@@ -201,7 +213,17 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         # The success path always answers JSON; an API that answers JSON on
         # success and HTML on failure is an inconsistent contract, and Task
         # 10 parses `description` out of every error body.
-        return jsonify({"error": exc.name, "description": exc.description}), exc.code
+        response = jsonify({"error": exc.name, "description": exc.description})
+        response.status_code = exc.code
+        # Some error headers carry protocol information the client needs, not
+        # decoration: 405's `Allow`, 401's `WWW-Authenticate`. Building a
+        # fresh response drops them, so they are copied over. `Content-Type`
+        # is skipped deliberately -- it describes the HTML body this handler
+        # exists to replace, and copying it would relabel JSON as text/html.
+        for header, value in exc.get_headers():
+            if header.lower() != "content-type":
+                response.headers[header] = value
+        return response
 
     @application.route("/")
     def index():
@@ -242,7 +264,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             destination = _output_target(job, record)
             try:
                 result = compress.compress_pdf(record["path"], destination, preset.id)
-            except compress.ToolError as exc:
+            except ToolError as exc:
                 message = _redact(str(exc), (record["path"], record["name"]))
                 results.append(_failure(record["name"], message, exc.stderr))
                 continue
@@ -281,7 +303,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         merged = job.outputs / output_name
         try:
             merge.merge_pdfs([record["path"] for record in usable], merged)
-        except (compress.ToolError, ValueError, OSError) as exc:
+        except (ToolError, ValueError, OSError) as exc:
             message = _redact(
                 str(exc), *[(record["path"], record["name"]) for record in usable]
             )
@@ -293,7 +315,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             merged.replace(staged)
             try:
                 result = compress.compress_pdf(staged, merged, preset.id)
-            except (compress.ToolError, OSError) as exc:
+            except (ToolError, OSError) as exc:
                 message = _redact(str(exc), (staged, output_name))
                 results.append(
                     _failure(output_name, message, getattr(exc, "stderr", ""))
@@ -333,7 +355,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             images.images_to_pdf(
                 [record["path"] for record in usable], destination, work_dir=job.root
             )
-        except (compress.ToolError, ValueError, OSError) as exc:
+        except (ToolError, ValueError, OSError) as exc:
             message = _redact(
                 str(exc), *[(record["path"], record["name"]) for record in usable]
             )
@@ -365,8 +387,17 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         destination = job.previews / str(index)
         try:
             comparison = preview.build_comparison(source, entry["path"], destination)
-        except compress.ToolError as exc:
-            return jsonify({"error": str(exc)}), 500
+        except ToolError as exc:
+            # Same treatment as every other route: redact the internal path
+            # and the position-prefixed on-disk name, then let the shared
+            # HTTPException handler shape the {error, description} envelope
+            # the client already parses.
+            message = _redact(
+                str(exc),
+                (source, entry["display_name"]),
+                (entry["path"], entry["display_name"]),
+            )
+            abort(500, description=message)
         return jsonify(
             {
                 "before": "/jobs/{0}/previews/{1}/before.png".format(job.id, index),
@@ -393,7 +424,12 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         return send_file(
             str(entry["path"]),
             as_attachment=True,
-            download_name=entry["display_name"],
+            # The display name is a client-supplied upload filename. It is
+            # normalized on its way into a zip member; a Content-Disposition
+            # filename is the same untrusted value leaving by another door,
+            # so it goes through the same normalization rather than relying
+            # on Werkzeug to object to whatever arrives.
+            download_name=jobs.safe_display_name(entry["display_name"]),
             mimetype="application/pdf",
         )
 
