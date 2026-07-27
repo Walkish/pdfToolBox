@@ -14,6 +14,7 @@ REQUIRED = {
     "pdfimages": "brew install poppler",
     "pdftoppm": "brew install poppler",
     "pdftotext": "brew install poppler",
+    "pdfinfo": "brew install poppler",
 }
 
 
