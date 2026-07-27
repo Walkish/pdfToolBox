@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from pdftools import compress
-from pdftools.inspect import parse_pdfimages_list
+from pdftools.inspect import PdfProfile, parse_pdfimages_list
 
 
 def image_ppi_values(pdf_path):
@@ -95,6 +95,35 @@ def test_size_decreases_monotonically_across_the_presets(scan_pdf_600dpi, tmp_pa
     assert sizes["lossless"] > sizes["print300"] > sizes["print200"] > sizes["screen150"]
 
 
+def test_the_qfactor_is_what_shrinks_the_output_not_just_the_resolution_flags(
+    scan_pdf_600dpi, tmp_path
+):
+    """The monotonic-ladder test above only proves resolution flags shrink the
+    file; it would still pass green if Ghostscript silently ignored the -c
+    QFactor snippet entirely (verified: stripping it and rerunning still gives
+    a monotonic ladder, just at different, uncontrolled quality). This isolates
+    quality from resolution by running the identical print300 command with and
+    without the -c pair, and requires the quality snippet to make a real,
+    material difference to the output size.
+    """
+    preset = compress.PRESETS["print300"]
+    dst_with = tmp_path / "with_qfactor.pdf"
+    dst_without = tmp_path / "without_qfactor.pdf"
+
+    command_with = compress.build_command(scan_pdf_600dpi, dst_with, preset)
+    command_without = compress.build_command(scan_pdf_600dpi, dst_without, preset)
+    c_index = command_without.index("-c")
+    del command_without[c_index:c_index + 2]
+
+    subprocess.run(command_with, capture_output=True, text=True, timeout=120)
+    subprocess.run(command_without, capture_output=True, text=True, timeout=120)
+
+    size_with = dst_with.stat().st_size
+    size_without = dst_without.stat().st_size
+    # Measured: 888,774 vs 365,899 bytes (2.4x) -- comfortably clears this bar.
+    assert size_with > size_without * 1.2
+
+
 def test_a_low_resolution_source_is_never_upsampled(scan_pdf_150dpi, tmp_path):
     result = compress.compress_pdf(scan_pdf_150dpi, tmp_path / "out.pdf", "print300")
     assert result.resampled is False
@@ -114,13 +143,58 @@ def test_a_vector_pdf_is_not_flagged_as_an_unreadable_scan(vector_pdf_2pages, tm
     assert not any(str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings)
 
 
+def test_a_low_resolution_scan_still_warns_below_floor_even_when_not_resampled(
+    scan_pdf_150dpi, tmp_path
+):
+    """A 150 dpi scan through print300 takes the "already at target" path
+    (resample=False, no downsampling happens), but the *output* still sits at
+    150 dpi -- below the print floor -- and the guardrail must say so
+    regardless of which code path produced that resolution.
+    """
+    result = compress.compress_pdf(scan_pdf_150dpi, tmp_path / "out.pdf", "print300")
+    assert result.resampled is False
+    assert any(str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings)
+    assert any("150" in warning for warning in result.warnings)
+
+
 def test_an_already_minimal_pdf_is_returned_unchanged(tiny_pdf, tmp_path):
     destination = tmp_path / "out.pdf"
     result = compress.compress_pdf(tiny_pdf, destination, "print300")
     assert result.returned_original is True
+    assert result.resampled is False
     assert result.size_after == result.size_before
     assert destination.read_bytes() == tiny_pdf.read_bytes()
     assert any("optimis" in warning.lower() for warning in result.warnings)
+
+
+def test_returned_original_path_reports_no_resampling_and_no_stale_floor_warning(
+    tiny_pdf, tmp_path
+):
+    """When Ghostscript's re-encode comes out larger, the original is kept --
+    but before this fix, ``resampled`` still reported the pre-run intent and
+    a below-floor warning could describe resampling that never actually
+    reached the file the caller receives. Inject a profile that looks like a
+    high-resolution scan (so the below-floor guardrail would fire if it used
+    the preset's target instead of the real output) through a preset whose
+    target is below the print floor, on a fixture (``tiny_pdf``) that
+    Ghostscript's own re-encode cannot shrink -- so returned_original is
+    guaranteed to trigger for real, via a real subprocess run.
+    """
+    high_res_scan = PdfProfile(
+        page_count=1,
+        images=[],
+        has_text=True,
+        is_scan=True,
+        min_ppi=1000,
+        median_ppi=1000,
+        max_ppi=1000,
+    )
+    result = compress.compress_pdf(
+        tiny_pdf, tmp_path / "out.pdf", "screen150", profile=high_res_scan
+    )
+    assert result.returned_original is True
+    assert result.resampled is False
+    assert not any(str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings)
 
 
 def test_a_cmyk_document_stays_cmyk(cmyk_pdf, tmp_path):
@@ -135,8 +209,59 @@ def test_a_cmyk_document_stays_cmyk(cmyk_pdf, tmp_path):
 
 
 def test_a_corrupt_pdf_raises_with_ghostscript_stderr(tmp_path):
+    """A file with no ``%PDF-`` header at all: poppler rejects it outright
+    (Syntax Error: Couldn't find trailer dictionary), so a real
+    ``profile_pdf`` call would raise ToolError before Ghostscript ever runs,
+    and this test would silently be exercising poppler's error path instead
+    of Ghostscript's. Bypass profiling with an injected profile so
+    Ghostscript itself is what fails here. (A file with a valid header but
+    garbage body -- e.g. "%PDF-1.4\nnot a pdf body\n" -- is not corrupt enough
+    for this: Ghostscript recovers from it and emits a valid blank-page PDF
+    with exit code 0.)
+    """
     broken = tmp_path / "broken.pdf"
-    broken.write_bytes(b"%PDF-1.4\nthis is not a pdf body\n")
+    broken.write_bytes(b"this is not a pdf file at all, no header, just junk bytes")
+    dummy_profile = PdfProfile(
+        page_count=1,
+        images=[],
+        has_text=True,
+        is_scan=False,
+        min_ppi=None,
+        median_ppi=None,
+        max_ppi=None,
+    )
     with pytest.raises(compress.ToolError) as excinfo:
-        compress.compress_pdf(broken, tmp_path / "out.pdf", "print300")
+        compress.compress_pdf(
+            broken, tmp_path / "out.pdf", "print300", profile=dummy_profile
+        )
     assert excinfo.value.stderr != ""
+    assert "ghostscript" in str(excinfo.value).lower()
+
+
+def test_lossless_preset_does_not_jpeg_encode_a_flate_source(flate_gray_pdf, tmp_path):
+    """The encoding every PNG image in a Word/Excel/PowerPoint export uses is
+    Flate, not JPEG. Ghostscript's own AutoFilterColorImages/GrayImages
+    default to true, which can pick a lossy JPEG re-encode for exactly this
+    kind of continuous-tone content when no explicit filter policy overrides
+    it -- turning "lossless" into a quality regression worse than any print
+    preset, silently and with no warning. Confirm the fixture is genuinely
+    non-JPEG to start with, then confirm the lossless preset's output still
+    is, whether or not the returned-original guardrail also fires.
+    """
+    listing_before = subprocess.run(
+        ["pdfimages", "-list", str(flate_gray_pdf)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
+    assert "jpeg" not in listing_before.lower()
+
+    result = compress.compress_pdf(flate_gray_pdf, tmp_path / "out.pdf", "lossless")
+
+    listing_after = subprocess.run(
+        ["pdfimages", "-list", str(result.output_path)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
+    assert "jpeg" not in listing_after.lower()

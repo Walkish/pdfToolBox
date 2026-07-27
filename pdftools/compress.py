@@ -10,8 +10,10 @@ because that macro bundles choices this tool must override (notably colour
 conversion) and its lower levels target screen viewing, not print.
 """
 import dataclasses
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -118,6 +120,30 @@ def _resample_args(preset: Preset) -> List[str]:
     ]
 
 
+def _lossless_args() -> List[str]:
+    """Filter policy for the no-resample path (the ``lossless`` preset, and
+    any preset whose target the source is already at or below).
+
+    Without this, Ghostscript's own defaults apply --
+    ``AutoFilterColorImages``/``AutoFilterGrayImages`` default to true, which
+    picks a lossy JPEG encoding at roughly QFactor 0.9 for any raster image
+    that is not already a JPEG. That would silently re-encode, say, a Flate
+    PNG from a Word export at "lossless" quality worse than any print preset.
+    JPEGs are passed through untouched; anything else stays lossless.
+    """
+    return [
+        "-dPassThroughJPEGImages=true",
+        "-dAutoFilterColorImages=false",
+        "-dColorImageFilter=/FlateEncode",
+        "-dAutoFilterGrayImages=false",
+        "-dGrayImageFilter=/FlateEncode",
+        "-dDownsampleColorImages=false",
+        "-dDownsampleGrayImages=false",
+        "-dDownsampleMonoImages=false",
+        "-dMonoImageFilter=/CCITTFaxEncode",
+    ]
+
+
 def _distiller_snippet(preset: Preset) -> str:
     """JPEG quality for pdfwrite goes through setdistillerparams; the
     -dJPEGQ switch is not reliably honoured by this device."""
@@ -143,6 +169,8 @@ def build_command(src, dst, preset: Preset, resample: bool = True) -> List[str]:
     do_resample = resample and preset.image_dpi is not None
     if do_resample:
         command += _resample_args(preset)
+    else:
+        command += _lossless_args()
     command += ["-o", str(dst)]
     if do_resample:
         command += ["-c", _distiller_snippet(preset)]
@@ -156,6 +184,32 @@ def _timeout_stderr(exc) -> str:
     if isinstance(stderr, bytes):
         return stderr.decode("utf-8", "replace")
     return stderr or ""
+
+
+def _restore_original(src_path: Path, dst_path: Path) -> None:
+    """Copy ``src_path`` over ``dst_path`` atomically.
+
+    A plain ``shutil.copyfile(src, dst)`` truncates ``dst`` before streaming
+    the copy, so a mid-copy I/O failure would leave a truncated PDF where
+    Ghostscript's valid output used to be. Copying to a sibling temp file and
+    renaming it into place means ``dst`` is either the old file or the fully
+    copied one, never a partial write.
+    """
+    fd, temp_name = tempfile.mkstemp(
+        dir=str(dst_path.parent), prefix=".compress-restore-", suffix=".tmp"
+    )
+    os.close(fd)
+    try:
+        shutil.copyfile(str(src_path), temp_name)
+        os.replace(temp_name, str(dst_path))
+    except OSError as exc:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise ToolError(
+            "Could not restore the original file at {0}: {1}".format(dst_path, exc)
+        ) from exc
 
 
 def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[PdfProfile] = None) -> CompressResult:
@@ -176,21 +230,13 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
 
     if resample and source.max_ppi is not None and source.max_ppi <= preset.image_dpi:
         # Nothing exceeds the target, so resampling would only re-encode.
+        # The file is still rewritten below -- just without downsampling --
+        # so this must not claim the images were left untouched.
         resample = False
         warnings.append(
-            "Source images are already at {0} dpi or below, so they were left "
-            "untouched and only the file structure was compressed.".format(
-                int(round(source.max_ppi))
-            )
-        )
-
-    if resample and source.is_scan and preset.image_dpi < PRINT_DPI_FLOOR:
-        warnings.append(
-            "This looks like a scan. {0} resamples it to {1} dpi, below the "
-            "{2} dpi print floor, so small text may become hard to read. "
-            "Use Print 200 dpi or higher if this is going to a printer.".format(
-                preset.label, preset.image_dpi, PRINT_DPI_FLOOR
-            )
+            "Source images are already at {0} dpi, at or below the {1} dpi "
+            "target, so they were not downsampled -- only the file structure "
+            "was recompressed.".format(int(round(source.max_ppi)), preset.image_dpi)
         )
 
     command = build_command(src, dst, preset, resample=resample)
@@ -207,7 +253,7 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
                 binaries.TIMEOUT_SECONDS, src.name
             ),
             stderr=_timeout_stderr(exc),
-        )
+        ) from exc
 
     if completed.returncode != 0 or not dst.exists():
         raise ToolError(
@@ -221,12 +267,27 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
     size_after = dst.stat().st_size
     returned_original = size_after >= size_before
     if returned_original:
-        # A bigger output is a failed compression, not a trade-off.
-        shutil.copyfile(str(src), str(dst))
+        # A bigger (or equal) output is a failed compression, not a
+        # trade-off. Nothing was actually resampled in the file the caller
+        # receives, so the intent computed above no longer applies.
+        _restore_original(src, dst)
         size_after = size_before
+        resample = False
         warnings.append(
             "Already optimised: compression produced a larger file, so the "
             "original was kept unchanged."
+        )
+
+    # Compute the below-floor warning from what the output *actually* is,
+    # not from the pre-run intent: if resampling was skipped or discarded
+    # above, the image resolution the reader will see is the source's, not
+    # the preset's target.
+    effective_dpi = preset.image_dpi if resample else source.max_ppi
+    if source.is_scan and effective_dpi is not None and effective_dpi < PRINT_DPI_FLOOR:
+        warnings.append(
+            "This looks like a scan at about {0} dpi, below the {1} dpi "
+            "print floor most printers need for small text to stay "
+            "legible.".format(int(round(effective_dpi)), PRINT_DPI_FLOOR)
         )
 
     return CompressResult(

@@ -5,9 +5,10 @@ bytes, so the repository carries no binary test assets and the fixtures stay
 readable and adjustable.
 """
 import random
+import zlib
 
 import pytest
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
 
 FONT_CANDIDATES = [
@@ -106,6 +107,69 @@ def _build_pdf_bytes(objects):
         size, xref_offset
     ).encode("ascii")
     return bytes(out)
+
+
+def _continuous_tone_gray(width, height):
+    """A smooth gradient plus fine noise: content with enough continuous-tone
+    variation that Ghostscript's own AutoFilterGrayImages heuristic picks a
+    lossy JPEG encoding for it, given the chance. Flat or text-like content
+    does not reliably trigger that heuristic, so this fixture would not
+    exercise the bug it exists to guard against.
+    """
+    gradient = Image.linear_gradient("L").resize((width, height))
+    noise = Image.effect_noise((width, height), 20)
+    # Centre the noise image (mean ~128) around zero before adding it in, so
+    # it perturbs the gradient instead of just brightening it.
+    zero_centred_noise = ImageChops.subtract(noise, Image.new("L", (width, height), 128))
+    return ImageChops.add(gradient, zero_centred_noise)
+
+
+def _flate_gray_pdf(path, width, height, page_size):
+    """A one-page PDF whose raster image is genuinely ``/Filter /FlateDecode``.
+
+    Pillow's own PDF writer picks the encoding it wants (often DCT even for
+    grayscale), so this is assembled by hand: raw grayscale samples, zlib
+    compressed, wrapped in an Image XObject with an explicit Flate filter.
+    This is the encoding a PNG from a Word/Excel/PowerPoint export carries,
+    and is the case the "lossless" preset must not silently re-encode as JPEG.
+    """
+    page_width, page_height = page_size
+    image = _continuous_tone_gray(width, height)
+    raw = image.tobytes()
+    compressed = zlib.compress(raw, 6)
+
+    image_obj = (
+        "<< /Type /XObject /Subtype /Image /Width {0} /Height {1} "
+        "/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode "
+        "/Length {2} >>\nstream\n"
+    ).format(width, height, len(compressed)).encode("ascii") + compressed + b"\nendstream"
+
+    content = "q {0} 0 0 {1} 0 0 cm /Im0 Do Q".format(page_width, page_height).encode("ascii")
+    content_obj = (
+        "<< /Length {0} >>\nstream\n".format(len(content)).encode("ascii")
+        + content
+        + b"\nendstream"
+    )
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {0} {1}] "
+            "/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>"
+        ).format(page_width, page_height).encode("ascii"),
+        image_obj,
+        content_obj,
+    ]
+    with open(path, "wb") as handle:
+        handle.write(_build_pdf_bytes(objects))
+    return path
+
+
+@pytest.fixture
+def flate_gray_pdf(tmp_path):
+    """A full-page Flate-encoded grayscale scan, at 150 dpi (5x7in page)."""
+    return _flate_gray_pdf(tmp_path / "flate_gray.pdf", 5 * 150, 7 * 150, (5 * 72, 7 * 72))
 
 
 def _vector_pdf(path, markers, page_size=(612, 792)):
