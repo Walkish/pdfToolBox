@@ -327,11 +327,11 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
             "Already optimised: compression produced a larger file, so the "
             "original was kept unchanged."
         )
-        # The "only the file structure was recompressed" note describes the
-        # rewrite that was just discarded, so reporting it next to "the
-        # original was kept unchanged" would state two contradictory things
-        # about the same file. Free-text warnings are the only channel the
-        # print guarantee has; a reader trained to skim them loses it.
+    # ``elif``, not a second ``if``: the "only the file structure was
+    # recompressed" note describes the rewrite the branch above just
+    # discarded, so reporting both would state two contradictory things about
+    # one file. Free-text warnings are the only channel the print guarantee
+    # has, and a reader trained to skim them loses it.
     elif skipped_at_target:
         warnings.append(
             "Source images are already at {0} dpi, at or below the {1} dpi "
