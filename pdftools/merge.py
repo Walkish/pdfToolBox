@@ -35,7 +35,7 @@ def merge_pdfs(paths: List[Path], dst) -> Path:
         except ToolError:
             raise
         except (PdfReadError, OSError, ValueError) as exc:
-            raise ToolError("Could not read {0}: {1}".format(path.name, exc))
+            raise ToolError("Could not read {0}: {1}".format(path.name, exc)) from exc
     with open(str(dst), "wb") as handle:
         writer.write(handle)
     return dst

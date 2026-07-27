@@ -389,6 +389,37 @@ def test_a_tool_error_does_not_leak_the_internal_on_disk_path(
     assert "/inputs/" not in result["error"]
 
 
+def test_an_image_bomb_fails_its_own_row_and_leaves_the_batch_alone(
+    client, png_past_pillows_own_ceiling, png_rgba
+):
+    """Measured before the fix: a 511 KB PNG declaring 484 megapixels made the
+    whole request answer 500 {"error":"Internal Server Error"} -- Pillow's
+    DecompressionBombError was raised inside Image.open and escaped both
+    except tuples -- and the valid image uploaded next to it was never
+    processed. One bad file must not fail the batch.
+    """
+    response = client.post(
+        "/api/images",
+        data={
+            "files": [
+                upload(png_past_pillows_own_ceiling, "bomb.png"),
+                upload(png_rgba, "good.png"),
+            ]
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    by_name = {result["name"]: result for result in payload["results"]}
+
+    assert by_name["bomb.png"]["ok"] is False
+    assert "bomb.png" in by_name["bomb.png"]["error"]
+    # The surviving image still becomes a PDF, under the default output name.
+    built = by_name["images.pdf"]
+    assert built["ok"] is True
+    assert client.get(built["download_url"]).get_data()[:5] == b"%PDF-"
+
+
 def test_index_wires_up_the_assets_and_the_print_warning_copy(client):
     body = client.get("/").get_data(as_text=True)
     assert "/static/app.js" in body

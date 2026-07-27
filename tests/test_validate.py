@@ -1,5 +1,8 @@
 """Tests for upload validation."""
+import warnings
+
 import pytest
+from PIL import Image
 
 from pdftools import validate
 
@@ -76,6 +79,37 @@ def test_a_file_exactly_at_the_size_limit_is_accepted(tmp_path, monkeypatch):
     assert at_limit.stat().st_size == 20
     # Must not raise: a file exactly at the limit is not "too large".
     validate.validate_pdf_file(at_limit, "doc.pdf")
+
+
+def test_an_image_over_the_pixel_limit_is_rejected(png_over_the_pixel_limit):
+    """A 190 KB file declaring 169 megapixels passes every byte-based check.
+    Pillow only *warns* in this band and then loads it, so before the explicit
+    bound this reached prepare_image and expanded to roughly 500 MB of RGB.
+    """
+    with warnings.catch_warnings():
+        # Pillow's own warning for this band; the point of the test is that
+        # the ValidationError below is raised instead of relying on it.
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        with pytest.raises(validate.ValidationError) as excinfo:
+            validate.validate_image_file(png_over_the_pixel_limit, "huge.png")
+    message = str(excinfo.value)
+    assert "huge.png" in message
+    assert "169 megapixels" in message
+    assert "134 megapixels" in message
+
+
+def test_an_image_past_pillows_own_ceiling_is_rejected_not_raised(
+    png_past_pillows_own_ceiling,
+):
+    """484 megapixels: Pillow raises DecompressionBombError from inside
+    Image.open, which derives straight from Exception and so escaped the
+    (UnidentifiedImageError, OSError, ValueError) tuple -- measured as an
+    HTTP 500 at route level. It must be a normal ValidationError."""
+    with pytest.raises(validate.ValidationError) as excinfo:
+        validate.validate_image_file(png_past_pillows_own_ceiling, "bomb.png")
+    message = str(excinfo.value)
+    assert "bomb.png" in message
+    assert "134 megapixels" in message
 
 
 # --- normalize_output_name ----------------------------------------------

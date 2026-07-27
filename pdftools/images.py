@@ -63,8 +63,20 @@ def prepare_image(path) -> Tuple[Image.Image, float]:
             if image.mode != "RGB":
                 return image.convert("RGB"), dpi
             return image.copy(), dpi
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise ToolError("Could not read image {0}: {1}".format(path.name, exc))
+    # DecompressionBombError derives straight from Exception, not from
+    # OSError or ValueError, so it needs naming explicitly: without it a
+    # bomb-sized image escapes as a bare Pillow exception. validate.py
+    # rejects those before they get here, but this module is usable on its
+    # own and must not depend on a caller having validated first.
+    except (
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+        Image.DecompressionBombError,
+    ) as exc:
+        raise ToolError(
+            "Could not read image {0}: {1}".format(path.name, exc)
+        ) from exc
 
 
 def images_to_pdf(paths: List[Path], dst, work_dir: Optional[Path] = None) -> Path:

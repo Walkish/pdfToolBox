@@ -11,6 +11,20 @@ from werkzeug.utils import secure_filename
 
 MAX_FILE_BYTES = 100 * 1024 * 1024
 
+# A byte limit is no protection against a decompression bomb: measured, a
+# 511 KB flat PNG declares 22000x22000 = 484 megapixels, and Pillow raises
+# DecompressionBombError from inside Image.open rather than returning an
+# image. Pillow's own thresholds also leave a band open -- between its
+# MAX_IMAGE_PIXELS (89.5 MP) and twice that, it only *warns* and then loads,
+# so a ~187 KB 13000x13000 PNG becomes about 500 MB of RGB in prepare_image.
+#
+# So the pixel count is bounded here explicitly, read from the header. The
+# bound has to sit above real scanner output: a 600 dpi A3 scan is about 70
+# megapixels (7020x9900), and 600 dpi on the largest common flatbed stays
+# under 100, so 134.2 MP leaves clear headroom for anything a scanner
+# produces while capping a flattened RGB copy at roughly 400 MB.
+MAX_IMAGE_PIXELS = 128 * 1024 * 1024
+
 # Most filesystems this tool runs on (APFS, ext4, ...) reject filenames
 # longer than this many *bytes* -- not characters -- with ENAMETOOLONG.
 NAME_MAX_BYTES = 255
@@ -58,6 +72,18 @@ def validate_pdf_file(path, display_name: str) -> None:
         )
 
 
+def _too_many_pixels(display_name: str, pixels) -> str:
+    """The rejection message, naming the file and the limit in megapixels."""
+    limit = "{0:.0f} megapixels".format(MAX_IMAGE_PIXELS / 1e6)
+    if pixels is None:
+        return "{0} is too large to decode safely; the limit is {1}".format(
+            display_name, limit
+        )
+    return "{0} has too many pixels ({1:.0f} megapixels); the limit is {2}".format(
+        display_name, pixels / 1e6, limit
+    )
+
+
 def validate_image_file(path, display_name: str) -> None:
     path = Path(path)
     suffix = Path(display_name).suffix.lower()
@@ -71,10 +97,24 @@ def validate_image_file(path, display_name: str) -> None:
     _check_size(path, display_name)
     try:
         with Image.open(str(path)) as image:
-            image.verify()
-            actual = image.format
+            # Image.open parses the header only, so this is the cheapest
+            # point at which the declared pixel count is known. Checked
+            # outside the try below: ValidationError is a ValueError, and
+            # raising it here would be swallowed by the except clause and
+            # reported as an unreadable image.
+            pixels = image.size[0] * image.size[1]
+            oversized = pixels > MAX_IMAGE_PIXELS
+            if not oversized:
+                image.verify()
+                actual = image.format
+    except Image.DecompressionBombError:
+        # Far enough over Pillow's own ceiling that it refuses to hand back
+        # an image at all, so the exact count never reaches the check below.
+        raise ValidationError(_too_many_pixels(display_name, None))
     except (UnidentifiedImageError, OSError, ValueError):
         raise ValidationError("{0} is not a readable image".format(display_name))
+    if oversized:
+        raise ValidationError(_too_many_pixels(display_name, pixels))
     if actual != expected:
         raise ValidationError(
             "{0} does not match its extension: the file is {1}".format(

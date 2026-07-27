@@ -335,6 +335,37 @@ def png_rgba(tmp_path):
     return path
 
 
+def _flat_png(path, size):
+    """A flat single-colour PNG: enormous in pixels, tiny on disk.
+
+    A decompression bomb needs no craft -- 22000x22000 white pixels compress
+    to about 500 KB -- and that is exactly why a byte-size limit cannot see
+    one coming.
+    """
+    image = Image.new("L", size, 255)
+    try:
+        image.save(str(path), "PNG", compress_level=9)
+    finally:
+        image.close()
+    return path
+
+
+@pytest.fixture
+def png_past_pillows_own_ceiling(tmp_path):
+    """484 megapixels (about 500 KB on disk). Past twice Pillow's
+    MAX_IMAGE_PIXELS, so ``Image.open`` raises DecompressionBombError instead
+    of returning an image at all."""
+    return _flat_png(tmp_path / "bomb.png", (22000, 22000))
+
+
+@pytest.fixture
+def png_over_the_pixel_limit(tmp_path):
+    """169 megapixels (about 190 KB on disk). Inside Pillow's warn-and-load
+    band -- over its MAX_IMAGE_PIXELS but under twice it -- so Pillow loads it
+    happily and only an explicit bound stops it becoming ~500 MB of RGB."""
+    return _flat_png(tmp_path / "huge.png", (13000, 13000))
+
+
 @pytest.fixture
 def jpeg_rotated(tmp_path):
     """Landscape pixels tagged orientation 6, i.e. displayed as portrait."""
