@@ -41,7 +41,12 @@ def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:
     completed = subprocess.run(
         command, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS
     )
-    output = out_prefix.with_suffix(".png")
+    # pdftoppm appends ".png" to the prefix string literally -- it does not
+    # replace an existing suffix the way Path.with_suffix does. A prefix
+    # basename containing a dot (e.g. "page.v1") is written as "page.v1.png",
+    # not "page.png", so the expected path must be built with append, not
+    # replace, semantics.
+    output = Path(str(out_prefix) + ".png")
     if completed.returncode != 0 or not output.exists():
         raise ToolError(
             "Could not render page {0} of {1}".format(page, Path(pdf_path).name),
@@ -77,19 +82,28 @@ def build_comparison(src_pdf, out_pdf, dest_dir, page: Optional[int] = None) -> 
     if page is None:
         page = choose_page(profile_pdf(src_pdf))
 
-    before_png = render_page(src_pdf, page, PREVIEW_DPI, dest_dir / "before_full")
-    after_png = render_page(out_pdf, page, PREVIEW_DPI, dest_dir / "after_full")
+    before_png = None
+    after_png = None
+    try:
+        before_png = render_page(src_pdf, page, PREVIEW_DPI, dest_dir / "before_full")
+        after_png = render_page(out_pdf, page, PREVIEW_DPI, dest_dir / "after_full")
 
-    with Image.open(str(before_png)) as before, Image.open(str(after_png)) as after:
-        # Rounding can make the two renders differ by a pixel; crop to the
-        # smaller of the two so the pair stays directly comparable.
-        common = (min(before.width, after.width), min(before.height, after.height))
-        box = crop_box(common, CROP_SIZE)
-        before_crop = dest_dir / "before.png"
-        after_crop = dest_dir / "after.png"
-        before.crop(box).save(str(before_crop), "PNG")
-        after.crop(box).save(str(after_crop), "PNG")
+        with Image.open(str(before_png)) as before, Image.open(str(after_png)) as after:
+            # Rounding can make the two renders differ by a pixel; crop to the
+            # smaller of the two so the pair stays directly comparable.
+            common = (min(before.width, after.width), min(before.height, after.height))
+            box = crop_box(common, CROP_SIZE)
+            before_crop = dest_dir / "before.png"
+            after_crop = dest_dir / "after.png"
+            before.crop(box).save(str(before_crop), "PNG")
+            after.crop(box).save(str(after_crop), "PNG")
+    finally:
+        # These are intermediate full-page renders, not the function's
+        # return values -- remove them whether we succeeded or raised partway
+        # through, so a partial failure never leaves a full-resolution PNG
+        # behind in a job's previews directory.
+        for full_render in (before_png, after_png):
+            if full_render is not None and full_render.exists():
+                full_render.unlink()
 
-    before_png.unlink()
-    after_png.unlink()
     return {"before": before_crop, "after": after_crop, "page": page, "dpi": PREVIEW_DPI}

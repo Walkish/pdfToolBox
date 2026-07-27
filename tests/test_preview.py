@@ -70,3 +70,23 @@ def test_rendering_a_broken_pdf_raises_a_tool_error(tmp_path):
     broken.write_bytes(b"%PDF-1.4\nnope\n")
     with pytest.raises(compress.ToolError):
         preview.render_page(broken, 1, 72, tmp_path / "out")
+
+
+def test_render_page_handles_a_prefix_that_already_contains_a_dot(vector_pdf_2pages, tmp_path):
+    # pdftoppm appends ".png" to the prefix string literally; it does not
+    # replace an existing suffix the way Path.with_suffix does. A prefix
+    # basename with a dot in it (e.g. derived from a versioned filename)
+    # must still resolve to the file pdftoppm actually wrote.
+    output = preview.render_page(vector_pdf_2pages, 1, 72, tmp_path / "page.v1")
+    assert output.exists()
+    assert output.name == "page.v1.png"
+
+
+def test_a_failed_second_render_leaves_no_full_page_renders_behind(scan_pdf_600dpi, tmp_path):
+    broken_out = tmp_path / "broken_out.pdf"
+    broken_out.write_bytes(b"%PDF-1.4\nnope\n")
+    dest_dir = tmp_path / "preview"
+    with pytest.raises(compress.ToolError):
+        preview.build_comparison(scan_pdf_600dpi, broken_out, dest_dir)
+    leftover_full_renders = list(dest_dir.glob("*_full.png"))
+    assert leftover_full_renders == []
