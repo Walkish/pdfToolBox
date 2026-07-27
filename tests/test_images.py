@@ -59,6 +59,37 @@ def test_an_exif_rotated_photo_comes_out_upright(jpeg_rotated, tmp_path):
     assert height_pt > width_pt
 
 
+def test_a_jpeg_with_only_an_exif_orientation_tag_falls_back_to_the_default_dpi(
+    jpeg_rotated, tmp_path
+):
+    # jpeg_rotated carries an EXIF segment (for the orientation tag) but no
+    # real resolution declaration. Pillow synthesizes info["dpi"] = (72, 72)
+    # for that case, which is indistinguishable from a genuine 72 dpi
+    # declaration unless jfif_unit is also checked -- an absolute-size
+    # assertion (not just aspect ratio) is required to catch a regression
+    # back to that 72 dpi reading. After EXIF transpose the laid-out image is
+    # 800x1200 px; at the 300 dpi default that is 192 x 288 pt.
+    output = images.images_to_pdf([jpeg_rotated], tmp_path / "out.pdf")
+    width_pt, height_pt = page_boxes(output)[0]
+    assert abs(width_pt - 192.0) < 6.0
+    assert abs(height_pt - 288.0) < 6.0
+
+
+def test_prepare_image_reports_the_default_dpi_for_an_exif_only_jpeg(jpeg_rotated):
+    _prepared, dpi = images.prepare_image(jpeg_rotated)
+    assert dpi == 300.0
+
+
+def test_an_absurd_but_genuinely_declared_dpi_still_falls_back_to_the_default(tmp_path):
+    # dpi=(5, 5) here is written with jfif_unit=1 (a real declaration, not
+    # Pillow's synthetic 72 dpi default), so this exercises the sanity window
+    # rather than the "no metadata at all" fallback path.
+    source = tmp_path / "absurd.jpg"
+    Image.new("RGB", (800, 600), (0, 0, 0)).save(str(source), "JPEG", dpi=(5, 5), quality=90)
+    _prepared, dpi = images.prepare_image(source)
+    assert dpi == 300.0
+
+
 def test_transparency_is_flattened_onto_white_not_black(png_rgba):
     prepared, _dpi = images.prepare_image(png_rgba)
     assert prepared.mode == "RGB"

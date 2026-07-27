@@ -5,6 +5,7 @@ letterboxing is added. Physical size follows the image's own dpi metadata when
 it has any, and falls back to 300 dpi otherwise, which keeps pages a sane size
 for printing instead of the 55-inch monsters a 72 dpi assumption produces.
 """
+import shutil
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -23,6 +24,14 @@ _MAX_SANE_DPI = 1200
 def _declared_dpi(image: Image.Image) -> float:
     value = image.info.get("dpi")
     if not value:
+        return float(DEFAULT_IMAGE_DPI)
+    if image.format == "JPEG" and image.info.get("jfif_unit", 0) not in (1, 2):
+        # Pillow's JpegImagePlugin synthesizes info["dpi"] = (72, 72) for any
+        # JPEG that carries an EXIF segment (say, just an orientation tag)
+        # but no genuine resolution declaration -- see _read_dpi_from_exif in
+        # PIL/JpegImagePlugin.py. jfif_unit 0 means "no physical unit" per the
+        # JFIF spec, so a (72, 72) reading under that condition is a synthetic
+        # default, not real metadata, and must not be trusted.
         return float(DEFAULT_IMAGE_DPI)
     horizontal = float(value[0])
     if _MIN_SANE_DPI <= horizontal <= _MAX_SANE_DPI:
@@ -78,6 +87,4 @@ def images_to_pdf(paths: List[Path], dst, work_dir: Optional[Path] = None) -> Pa
         return merge_pdfs(page_paths, dst)
     finally:
         if created_temp:
-            import shutil as _shutil
-
-            _shutil.rmtree(str(directory), ignore_errors=True)
+            shutil.rmtree(str(directory), ignore_errors=True)
