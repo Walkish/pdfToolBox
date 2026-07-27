@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
-from werkzeug.utils import secure_filename
+from werkzeug.exceptions import HTTPException
 
 from pdftools import binaries, compress, images, jobs, merge, preview, validate
+
+_DEBUG_TRUE_VALUES = ("1", "true", "yes")
 
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024
 HOST = "127.0.0.1"
@@ -28,16 +30,31 @@ def _saved_uploads(job, kind: str) -> List[Dict]:
     records = []
     for position, storage in enumerate(uploads):
         display_name = storage.filename or "file-{0}".format(position)
-        safe = secure_filename(display_name) or "file-{0}".format(position)
+        # A client-supplied filename can be arbitrarily long (a name right
+        # at a Mac's own 255-byte NAME_MAX is entirely legal); normalize_
+        # output_name clamps it to fit even after the position prefix below
+        # is added, so a legal upload can never blow the filesystem's own
+        # limit and take the request down with it.
+        safe = validate.normalize_output_name(display_name, "file-{0}.pdf".format(position))
         target = job.inputs / "{0:03d}_{1}".format(position, safe)
-        storage.save(str(target))
+        try:
+            storage.save(str(target))
+        except OSError as exc:
+            records.append(
+                {
+                    "error": "Could not save {0}: {1}".format(display_name, exc),
+                    "name": display_name,
+                    "position": position,
+                }
+            )
+            continue
         try:
             if kind == "pdf":
                 validate.validate_pdf_file(target, display_name)
             else:
                 validate.validate_image_file(target, display_name)
         except validate.ValidationError as exc:
-            target.unlink()
+            target.unlink(missing_ok=True)
             records.append(
                 {"error": str(exc), "name": display_name, "position": position}
             )
@@ -52,10 +69,31 @@ def _output_target(job, record) -> Path:
     Prefixed with the upload position: two uploads can legitimately share a
     filename, and without the prefix the second result would silently
     overwrite the first. The user still sees the original name, because
-    downloads are served under ``display_name``.
+    downloads are served under ``display_name``. Clamped through the same
+    length budget as the input side, for the same reason.
     """
-    safe = secure_filename(Path(record["name"]).name) or "output.pdf"
+    safe = validate.normalize_output_name(record["name"], "output.pdf")
     return job.outputs / "{0:03d}_{1}".format(record["position"], safe)
+
+
+def _redact(message: str, *pairs) -> str:
+    """Replace any internal on-disk path or filename embedded in a pdftools
+    error message with the name the user actually typed.
+
+    pdftools modules format some ``ToolError`` messages with the *internal*
+    path (a temp-directory path, or a position-prefixed on-disk name like
+    ``"003_report.pdf"``) because that is what they were handed -- they have
+    no notion of a "display name". That internal detail is noise (or worse,
+    an accidental disclosure of the server's filesystem layout) once it
+    reaches a client response, so it is swapped out here, at the boundary,
+    for the name the user recognizes. Each pair is
+    ``(internal_path, display_name)``.
+    """
+    for internal_path, display_name in pairs:
+        internal_path = Path(internal_path)
+        message = message.replace(str(internal_path), display_name)
+        message = message.replace(internal_path.name, display_name)
+    return message
 
 
 def _failure(name: str, message: str, stderr: str = "") -> Dict:
@@ -67,7 +105,10 @@ def _failure(name: str, message: str, stderr: str = "") -> Dict:
         "size_after": 0,
         "saved_pct": 0.0,
         "warnings": [],
-        "print_safe": True,
+        # None, not True: this row produced no output, so "print safe"
+        # does not apply -- a UI iterating rows must not read this as a
+        # positive claim about a file that was never written.
+        "print_safe": None,
         "download_url": None,
         "preview_url": None,
         "error": message,
@@ -130,7 +171,13 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
     application = Flask(__name__, static_folder="static", static_url_path="/static")
     application.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     store = job_store if job_store is not None else jobs.JobStore()
-    application.config["JOB_STORE"] = store
+
+    @application.errorhandler(HTTPException)
+    def _json_errors(exc):
+        # The success path always answers JSON; an API that answers JSON on
+        # success and HTML on failure is an inconsistent contract, and Task
+        # 10 parses `description` out of every error body.
+        return jsonify({"error": exc.name, "description": exc.description}), exc.code
 
     @application.route("/")
     def index():
@@ -138,18 +185,20 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
 
     @application.route("/api/presets")
     def presets():
-        ordered = ["print300", "print200", "screen150", "lossless"]
         return jsonify(
             {
                 "default": compress.DEFAULT_PRESET,
                 "print_floor_dpi": compress.PRINT_DPI_FLOOR,
                 "presets": [
                     {
-                        "id": compress.PRESETS[preset_id].id,
-                        "label": compress.PRESETS[preset_id].label,
-                        "print_safe": compress.PRESETS[preset_id].print_safe,
+                        "id": preset.id,
+                        "label": preset.label,
+                        "print_safe": preset.print_safe,
                     }
-                    for preset_id in ordered
+                    # PRESETS' own insertion order is the ladder's order; a
+                    # hand-written id list here would silently omit a fifth
+                    # preset added later while leaving it selectable.
+                    for preset in compress.PRESETS.values()
                 ],
             }
         )
@@ -170,7 +219,8 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             try:
                 result = compress.compress_pdf(record["path"], destination, preset.id)
             except compress.ToolError as exc:
-                results.append(_failure(record["name"], str(exc), exc.stderr))
+                message = _redact(str(exc), (record["path"], record["name"]))
+                results.append(_failure(record["name"], message, exc.stderr))
                 continue
             index = job.add_output(
                 result.output_path,
@@ -182,6 +232,13 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
 
     @application.route("/api/merge", methods=["POST"])
     def api_merge():
+        # Validate the preset before doing any merge work: api_compress
+        # validates first for the same reason -- a bad preset must not burn
+        # a real merge and then 400, abandoning a written output to the TTL
+        # sweep.
+        want_compress = request.form.get("compress") == "1"
+        preset = _requested_preset() if want_compress else None
+
         job = store.create()
         records = _saved_uploads(job, "pdf")
         if not records:
@@ -194,26 +251,36 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         if not usable:
             return jsonify(_payload(job, results))
 
-        output_name = secure_filename(request.form.get("output_name", "") or "merged.pdf")
-        if not output_name.lower().endswith(".pdf"):
-            output_name += ".pdf"
+        output_name = validate.normalize_output_name(
+            request.form.get("output_name", ""), "merged.pdf"
+        )
         merged = job.outputs / output_name
         try:
             merge.merge_pdfs([record["path"] for record in usable], merged)
-        except (compress.ToolError, ValueError) as exc:
-            results.append(_failure(output_name, str(exc), getattr(exc, "stderr", "")))
+        except (compress.ToolError, ValueError, OSError) as exc:
+            message = _redact(
+                str(exc), *[(record["path"], record["name"]) for record in usable]
+            )
+            results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
             return jsonify(_payload(job, results))
 
-        if request.form.get("compress") == "1":
-            preset = _requested_preset()
+        if want_compress:
             staged = job.root / "merged_raw.pdf"
             merged.replace(staged)
             try:
                 result = compress.compress_pdf(staged, merged, preset.id)
-            except compress.ToolError as exc:
-                results.append(_failure(output_name, str(exc), exc.stderr))
+            except (compress.ToolError, OSError) as exc:
+                message = _redact(str(exc), (staged, output_name))
+                results.append(
+                    _failure(output_name, message, getattr(exc, "stderr", ""))
+                )
                 return jsonify(_payload(job, results))
-            index = job.add_output(merged, output_name)
+            # The compressed merge result keeps its pre-compression source
+            # so /api/preview can render a before/after comparison for it,
+            # same as a single-file compress -- without this, the
+            # preview_url _success advertises 404s for exactly the rows
+            # where a legibility warning makes the user want to check.
+            index = job.add_output(merged, output_name, {"source": str(staged)})
             results.append(_success(job, index, output_name, result, preset))
         else:
             index = job.add_output(merged, output_name)
@@ -234,16 +301,19 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         if not usable:
             return jsonify(_payload(job, results))
 
-        output_name = secure_filename(request.form.get("output_name", "") or "images.pdf")
-        if not output_name.lower().endswith(".pdf"):
-            output_name += ".pdf"
+        output_name = validate.normalize_output_name(
+            request.form.get("output_name", ""), "images.pdf"
+        )
         destination = job.outputs / output_name
         try:
             images.images_to_pdf(
                 [record["path"] for record in usable], destination, work_dir=job.root
             )
-        except (compress.ToolError, ValueError) as exc:
-            results.append(_failure(output_name, str(exc), getattr(exc, "stderr", "")))
+        except (compress.ToolError, ValueError, OSError) as exc:
+            message = _redact(
+                str(exc), *[(record["path"], record["name"]) for record in usable]
+            )
+            results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
             return jsonify(_payload(job, results))
         index = job.add_output(destination, output_name)
         results.append(_plain_success(job, index, output_name, destination))
@@ -334,7 +404,11 @@ def main():
         )
     print("Ghostscript {0} detected.".format(binaries.gs_version()))
     print("PDF Toolbox running at http://{0}:{1}".format(HOST, PORT))
-    app.run(host=HOST, port=PORT, debug=bool(os.environ.get("PDFTOOLBOX_DEBUG")))
+    # bool(os.environ.get(...)) treats *any* non-empty value as on, so
+    # PDFTOOLBOX_DEBUG=0 or =false would enable the Werkzeug debugger
+    # console. Compare against known "on" spellings instead.
+    debug_flag = os.environ.get("PDFTOOLBOX_DEBUG", "").strip().lower() in _DEBUG_TRUE_VALUES
+    app.run(host=HOST, port=PORT, debug=debug_flag)
 
 
 if __name__ == "__main__":
