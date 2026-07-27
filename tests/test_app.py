@@ -22,6 +22,23 @@ def upload(path, name):
         return (io.BytesIO(handle.read()), name)
 
 
+def test_resolve_port_returns_default_when_unset(monkeypatch):
+    monkeypatch.delenv("PDFTOOLBOX_PORT", raising=False)
+    assert app_module.resolve_port() == app_module.PORT
+
+
+def test_resolve_port_honours_a_valid_override(monkeypatch):
+    monkeypatch.setenv("PDFTOOLBOX_PORT", "9999")
+    assert app_module.resolve_port() == 9999
+
+
+def test_resolve_port_rejects_a_non_integer_value(monkeypatch):
+    monkeypatch.setenv("PDFTOOLBOX_PORT", "not-a-port")
+    with pytest.raises(ValueError) as excinfo:
+        app_module.resolve_port()
+    assert "PDFTOOLBOX_PORT" in str(excinfo.value)
+
+
 def test_index_serves_the_three_tabs(client):
     response = client.get("/")
     assert response.status_code == 200

@@ -16,7 +16,31 @@ _DEBUG_TRUE_VALUES = ("1", "true", "yes")
 
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024
 HOST = "127.0.0.1"
-PORT = 5001
+# 5001 and 5000 are both bad defaults on macOS: 5000 is commonly held by
+# AirPlay Receiver and 5001 by Docker's own port-forwarding daemon, so a
+# fresh checkout of this project would fail to start with a confusing
+# "Address already in use" unless the default lands somewhere unlikely to
+# already be taken.
+PORT = 5057
+
+
+def resolve_port() -> int:
+    """The TCP port to bind: ``PDFTOOLBOX_PORT`` if set, else ``PORT``.
+
+    Raises ``ValueError`` with a message naming the offending value when the
+    override is set but is not a plain integer, so ``main()`` can fail with a
+    clear message instead of a bare traceback.
+    """
+    raw = os.environ.get("PDFTOOLBOX_PORT")
+    if raw is None or raw.strip() == "":
+        return PORT
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise ValueError(
+            "PDFTOOLBOX_PORT={0!r} is not a valid port number; it must be an "
+            "integer, e.g. PDFTOOLBOX_PORT=5057.".format(raw)
+        )
 
 
 def _saved_uploads(job, kind: str) -> List[Dict]:
@@ -402,13 +426,25 @@ def main():
         raise SystemExit(
             "PDF Toolbox cannot start.\n{0}\n\nInstall it and try again.".format(missing)
         )
+    try:
+        port = resolve_port()
+    except ValueError as exc:
+        raise SystemExit("PDF Toolbox cannot start.\n{0}".format(exc))
     print("Ghostscript {0} detected.".format(binaries.gs_version()))
-    print("PDF Toolbox running at http://{0}:{1}".format(HOST, PORT))
+    print("PDF Toolbox running at http://{0}:{1}".format(HOST, port))
     # bool(os.environ.get(...)) treats *any* non-empty value as on, so
     # PDFTOOLBOX_DEBUG=0 or =false would enable the Werkzeug debugger
     # console. Compare against known "on" spellings instead.
     debug_flag = os.environ.get("PDFTOOLBOX_DEBUG", "").strip().lower() in _DEBUG_TRUE_VALUES
-    app.run(host=HOST, port=PORT, debug=debug_flag)
+    try:
+        app.run(host=HOST, port=port, debug=debug_flag)
+    except OSError as exc:
+        raise SystemExit(
+            "PDF Toolbox cannot start.\nCould not bind {0}:{1} ({2}).\n\n"
+            "Something else is already listening on that port. Set "
+            "PDFTOOLBOX_PORT to a free port and try again, e.g.:\n"
+            "  PDFTOOLBOX_PORT=5058 .venv/bin/python app.py".format(HOST, port, exc)
+        )
 
 
 if __name__ == "__main__":
