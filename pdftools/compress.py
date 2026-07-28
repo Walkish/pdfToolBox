@@ -344,11 +344,15 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
     # target, that one number describes every page -- is exactly what has
     # gone wrong here before: a two-page bundle at 600 and 100 dpi through
     # print300 leaves page 2 at 100 dpi, which no preset-derived number sees.
+    # Deliberately not gated on ``source.is_scan``. scan_floor_ppi already
+    # applies the page-covering-image test per page, which is what the
+    # document-level flag was ever a proxy for -- and the flag needs 80% of
+    # pages to qualify, so a mostly-text bundle carrying one 100 dpi scanned
+    # sheet would report False. Saying "not below the floor" about a page that
+    # will print at 100 dpi is a false claim, worse than saying nothing.
     output_floor_ppi = scan_floor_ppi(dst)
     below_print_floor = (
-        source.is_scan
-        and output_floor_ppi is not None
-        and output_floor_ppi < PRINT_DPI_FLOOR
+        output_floor_ppi is not None and output_floor_ppi < PRINT_DPI_FLOOR
     )
     if below_print_floor:
         warnings.append(_below_floor_warning(output_floor_ppi, preset, resample))

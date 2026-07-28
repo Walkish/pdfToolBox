@@ -52,10 +52,10 @@ any port.
 Text in born-digital PDFs is vector and stays sharp at every level; only
 embedded images are resampled. Scans are the exception, because there the image
 resolution *is* the text resolution. Every compressed file is therefore
-re-measured afterwards, page by page: if any scanned page lands below 200 dpi
-you get a warning before you download it — including a mixed bundle where only
-one sheet came in at a low resolution — and the readability comparison lets you
-check the result at 1:1 first.
+re-measured afterwards, page by page: if any page whose image covers the whole
+sheet lands below 200 dpi you get a warning before you download it — including a
+mostly-text bundle where just one sheet came in at a low resolution — and the
+readability comparison lets you check the result at 1:1 first.
 
 Files whose images are already at or below the target are not resampled, and a
 file that would come out larger is returned unchanged.

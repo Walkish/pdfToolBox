@@ -105,6 +105,34 @@ def mixed_resolution_scan_pdf(tmp_path):
 
 
 @pytest.fixture
+def text_bundle_with_one_low_res_scan_page(tmp_path):
+    """Four vector text pages plus one full-page 100 dpi scanned page.
+
+    This is the shape that document-level scan detection cannot see: only one
+    page in five is a scan page, so ``is_scan`` is False, yet that page will
+    print at 100 dpi -- half the print floor. A reader meets the worst page,
+    not the document average.
+    """
+    text_path = _vector_pdf(
+        tmp_path / "_bundle_text.pdf",
+        ["PAGE-1", "PAGE-2", "PAGE-3", "PAGE-4"],
+        page_size=_OCR_PAGE_SIZE,
+    )
+    image = _render_text_page(5 * 100, 7 * 100, mode="L")
+    image_path = _save_image_pdf(image, tmp_path / "_bundle_scan.pdf", 100)
+
+    writer = PdfWriter()
+    for page in PdfReader(str(text_path)).pages:
+        writer.add_page(page)
+    writer.add_page(PdfReader(str(image_path)).pages[0])
+
+    path = tmp_path / "bundle_with_low_res_scan.pdf"
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+@pytest.fixture
 def cmyk_pdf(tmp_path):
     """A CMYK page, to prove the colour space survives compression."""
     image = _render_text_page(1000, 1400, mode="RGB").convert("CMYK")

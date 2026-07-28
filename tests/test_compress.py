@@ -4,7 +4,7 @@ import subprocess
 import pytest
 
 from pdftools import compress
-from pdftools.inspect import PdfProfile, parse_pdfimages_list
+from pdftools.inspect import PdfProfile, parse_pdfimages_list, profile_pdf
 
 
 def image_ppi_values(pdf_path):
@@ -358,6 +358,37 @@ def test_a_mixed_resolution_scan_is_judged_by_its_worst_page(
     assert max(ppi_values) <= 345
     assert min(ppi_values) <= 110
 
+    assert result.below_print_floor is True
+    floor_warnings = [
+        warning
+        for warning in result.warnings
+        if str(compress.PRINT_DPI_FLOOR) in warning
+    ]
+    assert len(floor_warnings) == 1
+    assert "100 dpi" in floor_warnings[0]
+
+
+def test_one_low_res_scan_page_in_a_text_bundle_is_still_reported(
+    text_bundle_with_one_low_res_scan_page, tmp_path
+):
+    """A mostly-text document is not a "scan", but its one scanned page still
+    prints at 100 dpi.
+
+    Document-level scan detection cannot see this: one scan page in five
+    leaves ``is_scan`` False. The floor check must answer to the measured
+    worst page instead, because that is the page the reader meets. Claiming
+    ``below_print_floor is False`` here would be an explicit false statement
+    about print safety, which is worse than the silence it replaced.
+    """
+    destination = tmp_path / "out.pdf"
+    source_profile = profile_pdf(text_bundle_with_one_low_res_scan_page)
+    assert source_profile.is_scan is False, "fixture must not read as a whole-doc scan"
+
+    result = compress.compress_pdf(
+        text_bundle_with_one_low_res_scan_page, destination, "print300"
+    )
+
+    assert min(image_ppi_values(destination)) <= 110
     assert result.below_print_floor is True
     floor_warnings = [
         warning
