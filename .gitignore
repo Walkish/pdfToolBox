@@ -6,3 +6,4 @@ __pycache__/
 
 # Internal design and execution docs — kept locally, not published
 docs/
+.idea/
