@@ -1,4 +1,5 @@
 """Tests for image-to-PDF conversion."""
+
 import subprocess
 
 import pytest
@@ -59,9 +60,7 @@ def test_an_exif_rotated_photo_comes_out_upright(jpeg_rotated, tmp_path):
     assert height_pt > width_pt
 
 
-def test_a_jpeg_with_only_an_exif_orientation_tag_falls_back_to_the_default_dpi(
-    jpeg_rotated, tmp_path
-):
+def test_a_jpeg_with_only_an_exif_orientation_tag_falls_back_to_the_default_dpi(jpeg_rotated, tmp_path):
     # jpeg_rotated carries an EXIF segment (for the orientation tag) but no
     # real resolution declaration. Pillow synthesizes info["dpi"] = (72, 72)
     # for that case, which is indistinguishable from a genuine 72 dpi
@@ -111,7 +110,7 @@ def test_page_order_follows_the_input_order(tmp_path):
         paths.append(path)
     output = images.images_to_pdf(paths, tmp_path / "out.pdf")
     first, second = page_boxes(output)
-    assert first[1] > first[0]   # portrait first
+    assert first[1] > first[0]  # portrait first
     assert second[0] > second[1]  # landscape second
 
 

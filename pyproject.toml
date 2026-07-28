@@ -1,0 +1,58 @@
+[project]
+name = "pdftoolbox"
+version = "0.1.0"
+description = "Localhost PDF toolbox: print-safe compression, merge, and image-to-PDF conversion."
+readme = "README.md"
+# Pinned to 3.9 because the codebase is deliberately written without 3.10+
+# syntax (no X | Y unions, no match, no dataclass slots). 3.9.25 rather than
+# the 3.9.10 this was developed on: it is the 3.9 patch uv can install and
+# manage itself, so the environment reproduces without pyenv.
+requires-python = "==3.9.25"
+dependencies = [
+    "flask",
+    "pypdf",
+    "pillow",
+    # Imported directly (secure_filename, HTTPException), not just via flask.
+    "werkzeug",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff==0.16.0",
+    "ty==0.0.64",
+]
+
+[tool.uv]
+required-version = "0.11.8"
+# An application, not a distributable package: nothing to build, and pdftools/
+# is imported from the repository root (see PYTHONPATH in the Makefile).
+package = false
+python-preference = "only-managed"
+
+[tool.ruff]
+line-length = 120
+indent-width = 4
+target-version = "py39"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+line-ending = "lf"
+
+[tool.ruff.lint]
+# Pinned explicitly instead of relying on ruff's defaults, which are not stable
+# across releases: measured, ruff 0.16 reports 238 findings on this codebase
+# with `extend-select = ["I"]` alone (mostly UP030/UP032 .format-to-f-string and
+# UP006 typing.List-to-list rewrites), where 0.9 reported one. An unpinned
+# select turns a ruff upgrade into a mass rewrite of untouched, reviewed code.
+# E4/E7/E9/F is ruff's documented default set; I adds import sorting.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ty.environment]
+python-version = "3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

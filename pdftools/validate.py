@@ -4,7 +4,9 @@ Extension checks alone are not enough: PDFs are an active format and this tool
 hands untrusted files to Ghostscript, so content is sniffed as well and a
 mislabelled file is rejected before any external tool sees it.
 """
+
 from pathlib import Path
+from typing import Optional
 
 from PIL import Image, UnidentifiedImageError
 from werkzeug.utils import secure_filename
@@ -67,21 +69,15 @@ def validate_pdf_file(path, display_name: str) -> None:
     with open(str(path), "rb") as handle:
         head = handle.read(_PDF_MAGIC_WINDOW)
     if _PDF_MAGIC not in head:
-        raise ValidationError(
-            "{0} is not a PDF: the %PDF- header is missing".format(display_name)
-        )
+        raise ValidationError("{0} is not a PDF: the %PDF- header is missing".format(display_name))
 
 
 def _too_many_pixels(display_name: str, pixels) -> str:
     """The rejection message, naming the file and the limit in megapixels."""
     limit = "{0:.0f} megapixels".format(MAX_IMAGE_PIXELS / 1e6)
     if pixels is None:
-        return "{0} is too large to decode safely; the limit is {1}".format(
-            display_name, limit
-        )
-    return "{0} has too many pixels ({1:.0f} megapixels); the limit is {2}".format(
-        display_name, pixels / 1e6, limit
-    )
+        return "{0} is too large to decode safely; the limit is {1}".format(display_name, limit)
+    return "{0} has too many pixels ({1:.0f} megapixels); the limit is {2}".format(display_name, pixels / 1e6, limit)
 
 
 def validate_image_file(path, display_name: str) -> None:
@@ -90,9 +86,7 @@ def validate_image_file(path, display_name: str) -> None:
     expected = IMAGE_EXTENSIONS.get(suffix)
     if expected is None:
         raise ValidationError(
-            "{0} is not a supported image type ({1})".format(
-                display_name, ", ".join(sorted(IMAGE_EXTENSIONS))
-            )
+            "{0} is not a supported image type ({1})".format(display_name, ", ".join(sorted(IMAGE_EXTENSIONS)))
         )
     _check_size(path, display_name)
     try:
@@ -116,11 +110,7 @@ def validate_image_file(path, display_name: str) -> None:
     if oversized:
         raise ValidationError(_too_many_pixels(display_name, pixels))
     if actual != expected:
-        raise ValidationError(
-            "{0} does not match its extension: the file is {1}".format(
-                display_name, actual
-            )
-        )
+        raise ValidationError("{0} does not match its extension: the file is {1}".format(display_name, actual))
 
 
 def _clamp_utf8(text: str, max_bytes: int) -> str:
@@ -154,13 +144,14 @@ def _clamp_utf8(text: str, max_bytes: int) -> str:
     return ""
 
 
-def normalize_output_name(name: str, default: str) -> str:
+def normalize_output_name(name: Optional[str], default: str) -> str:
     """A filesystem-safe ``.pdf`` filename, clamped to fit a 255-byte
     NAME_MAX even after a caller prefixes it with a 4-byte upload position
     ("003_").
 
     ``name`` is untrusted -- a client-supplied upload filename, or the
-    ``output_name`` form field -- and ``default`` is the fallback used when
+    ``output_name`` form field, which may be absent entirely, hence Optional --
+    and ``default`` is the fallback used when
     nothing usable survives sanitizing (e.g. ``"merged.pdf"``). A name that
     is merely too long is not rejected outright: a truncated stem still
     identifies the file well enough, and rejecting the whole request over

@@ -6,24 +6,34 @@ unprintable, merging PDFs, and turning images into a PDF.
 ## Requirements
 
 - macOS with Homebrew
-- Python 3.9+
-- Ghostscript and poppler:
+- [uv](https://docs.astral.sh/uv/) — `make setup` installs the pinned version if
+  you do not have it, and manages the Python toolchain itself
+- Ghostscript and poppler, which are not Python packages and so are the one
+  thing uv cannot install for you:
 
 ```bash
 brew install ghostscript poppler
 ```
 
+Check everything at once:
+
+```bash
+make local-env-check
+```
+
 ## Setup
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
+make setup
 ```
+
+That creates `.venv` with the Python pinned in `pyproject.toml` and installs
+every dependency from `uv.lock`.
 
 ## Run
 
 ```bash
-.venv/bin/python app.py
+make dev
 ```
 
 Then open http://127.0.0.1:5057
@@ -32,7 +42,7 @@ The server listens on port 5057 by default. If that port is already taken on
 your machine, set `PDFTOOLBOX_PORT` to a free one:
 
 ```bash
-PDFTOOLBOX_PORT=5058 .venv/bin/python app.py
+PDFTOOLBOX_PORT=5058 make dev
 ```
 
 `PDFTOOLBOX_PORT` must be a plain integer; an invalid value or an
@@ -83,8 +93,22 @@ file that would come out larger is returned unchanged.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest
+make test
 ```
+
+## Lint and type checks
+
+```bash
+make lint
+```
+
+Runs `ruff check`, `ruff format` and `ty`. Locally it fixes and formats in
+place; set `IS_CI_BUILD=1` to check without writing, which is what CI should
+use.
+
+The ruff rule set is pinned explicitly in `pyproject.toml` rather than left to
+ruff's defaults, which widen between releases — otherwise upgrading ruff turns
+into a mass rewrite of untouched code.
 
 ## Security
 

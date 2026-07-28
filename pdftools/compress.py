@@ -9,6 +9,7 @@ Presets set image parameters explicitly instead of using -dPDFSETTINGS,
 because that macro bundles choices this tool must override (notably colour
 conversion) and its lower levels target screen viewing, not print.
 """
+
 import dataclasses
 import os
 import shutil
@@ -163,14 +164,8 @@ def _lossless_args() -> List[str]:
 def _distiller_snippet(preset: Preset) -> str:
     """JPEG quality for pdfwrite goes through setdistillerparams; the
     -dJPEGQ switch is not reliably honoured by this device."""
-    image_dict = (
-        "<< /QFactor {0} /Blend 1 /HSamples {1} /VSamples {1} >>".format(
-            preset.qfactor, preset.chroma_samples
-        )
-    )
-    return "<< /ColorImageDict {0} /GrayImageDict {0} >> setdistillerparams".format(
-        image_dict
-    )
+    image_dict = "<< /QFactor {0} /Blend 1 /HSamples {1} /VSamples {1} >>".format(preset.qfactor, preset.chroma_samples)
+    return "<< /ColorImageDict {0} /GrayImageDict {0} >> setdistillerparams".format(image_dict)
 
 
 def build_command(src, dst, preset: Preset, resample: bool = True) -> List[str]:
@@ -208,9 +203,7 @@ def _below_floor_warning(output_ppi: float) -> str:
         "A page here is about {0} dpi, below the {1} dpi print floor most "
         "printers need for small text to stay legible. That is the resolution "
         "the page arrived at, so no compression level can improve it -- "
-        "rescan it if this is going to a printer.".format(
-            int(round(output_ppi)), PRINT_DPI_FLOOR
-        )
+        "rescan it if this is going to a printer.".format(int(round(output_ppi)), PRINT_DPI_FLOOR)
     )
 
 
@@ -230,9 +223,7 @@ def _restore_original(src_path: Path, dst_path: Path) -> None:
     renaming it into place means ``dst`` is either the old file or the fully
     copied one, never a partial write.
     """
-    fd, temp_name = tempfile.mkstemp(
-        dir=str(dst_path.parent), prefix=".compress-restore-", suffix=".tmp"
-    )
+    fd, temp_name = tempfile.mkstemp(dir=str(dst_path.parent), prefix=".compress-restore-", suffix=".tmp")
     os.close(fd)
     try:
         shutil.copyfile(str(src_path), temp_name)
@@ -242,19 +233,13 @@ def _restore_original(src_path: Path, dst_path: Path) -> None:
             os.unlink(temp_name)
         except OSError:
             pass
-        raise ToolError(
-            "Could not restore the original file at {0}: {1}".format(dst_path, exc)
-        ) from exc
+        raise ToolError("Could not restore the original file at {0}: {1}".format(dst_path, exc)) from exc
 
 
 def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[PdfProfile] = None) -> CompressResult:
     """Compress ``src`` into ``dst`` at ``preset_id``, guarding legibility."""
     if preset_id not in PRESETS:
-        raise ValueError(
-            "Unknown preset {0!r}. Known presets: {1}".format(
-                preset_id, ", ".join(sorted(PRESETS))
-            )
-        )
+        raise ValueError("Unknown preset {0!r}. Known presets: {1}".format(preset_id, ", ".join(sorted(PRESETS))))
     preset = PRESETS[preset_id]
     src = Path(src)
     dst = Path(dst)
@@ -262,7 +247,11 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
 
     warnings = []
     resample = preset.image_dpi is not None
-    skipped_at_target = False
+    # Holds the measured source resolution when resampling was skipped because
+    # the source already sits at or below the target. Carrying the value rather
+    # than a bare flag keeps the number and its not-None-ness together, so the
+    # branch that reports it cannot read a None back off the profile.
+    skipped_at_ppi = None  # type: Optional[float]
 
     if resample and source.max_ppi is not None and source.max_ppi <= preset.image_dpi:
         # Nothing exceeds the target, so resampling would only re-encode.
@@ -271,7 +260,7 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
         # is only appended after the run, because the returned-original
         # guardrail can throw that rewrite away entirely.
         resample = False
-        skipped_at_target = True
+        skipped_at_ppi = source.max_ppi
 
     command = build_command(src, dst, preset, resample=resample)
     try:
@@ -283,17 +272,13 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
         )
     except subprocess.TimeoutExpired as exc:
         raise ToolError(
-            "Ghostscript timed out after {0}s on {1}".format(
-                binaries.TIMEOUT_SECONDS, src.name
-            ),
+            "Ghostscript timed out after {0}s on {1}".format(binaries.TIMEOUT_SECONDS, src.name),
             stderr=_timeout_stderr(exc),
         ) from exc
 
     if completed.returncode != 0 or not dst.exists():
         raise ToolError(
-            "Ghostscript failed on {0} with exit code {1}".format(
-                src.name, completed.returncode
-            ),
+            "Ghostscript failed on {0} with exit code {1}".format(src.name, completed.returncode),
             stderr=completed.stderr or completed.stdout,
         )
 
@@ -307,20 +292,17 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
         _restore_original(src, dst)
         size_after = size_before
         resample = False
-        warnings.append(
-            "Already optimised: compression produced a larger file, so the "
-            "original was kept unchanged."
-        )
+        warnings.append("Already optimised: compression produced a larger file, so the original was kept unchanged.")
     # ``elif``, not a second ``if``: the "only the file structure was
     # recompressed" note describes the rewrite the branch above just
     # discarded, so reporting both would state two contradictory things about
     # one file. Free-text warnings are the only channel the print guarantee
     # has, and a reader trained to skim them loses it.
-    elif skipped_at_target:
+    elif skipped_at_ppi is not None:
         warnings.append(
             "Source images are already at {0} dpi, at or below the {1} dpi "
             "target, so they were not downsampled -- only the file structure "
-            "was recompressed.".format(int(round(source.max_ppi)), preset.image_dpi)
+            "was recompressed.".format(int(round(skipped_at_ppi)), preset.image_dpi)
         )
 
     # Measure the finished file instead of predicting it from the preset.
@@ -335,9 +317,7 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
     # sheet would report False. Saying "not below the floor" about a page that
     # will print at 100 dpi is a false claim, worse than saying nothing.
     output_floor_ppi = scan_floor_ppi(dst)
-    below_print_floor = (
-        output_floor_ppi is not None and output_floor_ppi < PRINT_DPI_FLOOR
-    )
+    below_print_floor = output_floor_ppi is not None and output_floor_ppi < PRINT_DPI_FLOOR
     if below_print_floor:
         warnings.append(_below_floor_warning(output_floor_ppi))
 

@@ -1,4 +1,5 @@
 """Tests for source-PDF profiling."""
+
 import pytest
 
 from pdftools import inspect as pdfinspect
@@ -36,6 +37,10 @@ def test_profile_of_a_scan_reports_scan_and_no_text(scan_pdf_600dpi):
     assert profile.page_count == 1
     assert profile.has_text is False
     assert profile.is_scan is True
+    # Assert not-None separately: these fields are Optional, and a None here
+    # should fail as "expected a measurement, got none" rather than blowing up
+    # inside the comparison.
+    assert profile.max_ppi is not None
     assert 550 <= profile.max_ppi <= 650
 
 
@@ -52,12 +57,15 @@ def test_profile_ppi_statistics_span_min_median_and_max(scan_pdf_150dpi):
     profile = pdfinspect.profile_pdf(scan_pdf_150dpi)
     assert profile.min_ppi == profile.max_ppi
     assert profile.median_ppi == profile.min_ppi
+    assert profile.min_ppi is not None
     assert 130 <= profile.min_ppi <= 170
 
 
 def test_scan_image_covers_nearly_the_whole_page(scan_pdf_600dpi):
     profile = pdfinspect.profile_pdf(scan_pdf_600dpi)
-    assert profile.images[0].coverage >= 0.9
+    coverage = profile.images[0].coverage
+    assert coverage is not None
+    assert coverage >= 0.9
 
 
 def test_profile_of_an_ocr_scan_reports_text_and_is_still_a_scan(ocr_scan_pdf):

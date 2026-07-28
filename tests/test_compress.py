@@ -1,4 +1,5 @@
 """Tests for Ghostscript compression, presets, and print-safety guardrails."""
+
 import subprocess
 
 import pytest
@@ -9,9 +10,7 @@ from pdftools.inspect import PdfProfile, parse_pdfimages_list, profile_pdf
 
 def image_ppi_values(pdf_path):
     """Actual ppi of every image in a PDF, straight from pdfimages."""
-    listing = subprocess.run(
-        ["pdfimages", "-list", str(pdf_path)], capture_output=True, text=True, timeout=120
-    ).stdout
+    listing = subprocess.run(["pdfimages", "-list", str(pdf_path)], capture_output=True, text=True, timeout=120).stdout
     return [image.ppi for image in parse_pdfimages_list(listing) if image.ppi is not None]
 
 
@@ -22,9 +21,7 @@ def image_encodings(pdf_path):
     Flate one, so this is the direct measurement of whether a lossless source
     was re-encoded lossily.
     """
-    listing = subprocess.run(
-        ["pdfimages", "-list", str(pdf_path)], capture_output=True, text=True, timeout=120
-    ).stdout
+    listing = subprocess.run(["pdfimages", "-list", str(pdf_path)], capture_output=True, text=True, timeout=120).stdout
     encodings = []
     for line in listing.splitlines():
         fields = line.split()
@@ -41,17 +38,14 @@ def test_every_preset_is_registered_under_its_own_id():
     # Every level is print-safe now: the lowest target is 300 dpi, well above
     # the floor, so no preset can render a document unprintable.
     assert all(preset.print_safe for preset in compress.PRESETS.values())
-    assert min(
-        preset.image_dpi
-        for preset in compress.PRESETS.values()
-        if preset.image_dpi is not None
-    ) > compress.PRINT_DPI_FLOOR
+    assert (
+        min(preset.image_dpi for preset in compress.PRESETS.values() if preset.image_dpi is not None)
+        > compress.PRINT_DPI_FLOOR
+    )
 
 
 def test_command_always_carries_the_print_safety_flags(tmp_path):
-    command = compress.build_command(
-        tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["print300"]
-    )
+    command = compress.build_command(tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["print300"])
     for flag in (
         "-dSAFER",
         "-dColorConversionStrategy=/LeaveColorUnchanged",
@@ -63,9 +57,7 @@ def test_command_always_carries_the_print_safety_flags(tmp_path):
 
 
 def test_command_sets_resolution_and_threshold_from_the_preset(tmp_path):
-    command = compress.build_command(
-        tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["print600"]
-    )
+    command = compress.build_command(tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["print600"])
     assert "-dColorImageResolution=600" in command
     assert "-dGrayImageResolution=600" in command
     assert "-dMonoImageResolution=1200" in command
@@ -75,9 +67,7 @@ def test_command_sets_resolution_and_threshold_from_the_preset(tmp_path):
 
 
 def test_command_omits_resampling_for_the_lossless_preset(tmp_path):
-    command = compress.build_command(
-        tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["lossless"]
-    )
+    command = compress.build_command(tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["lossless"])
     assert not any(part.startswith("-dColorImageResolution") for part in command)
     assert "-c" not in command
 
@@ -112,9 +102,7 @@ def test_the_skip_resample_leg_of_a_print_preset_keeps_the_lossless_filters(tmp_
 
 
 def test_command_never_uses_a_shell_string(tmp_path):
-    command = compress.build_command(
-        tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["print300"]
-    )
+    command = compress.build_command(tmp_path / "in.pdf", tmp_path / "out.pdf", compress.PRESETS["print300"])
     assert isinstance(command, list)
     assert command[-1] == str(tmp_path / "in.pdf")
     assert command[-2] == "-f"
@@ -150,16 +138,12 @@ def test_size_decreases_monotonically_across_the_presets(scan_pdf_1200dpi, tmp_p
     """
     sizes = {}
     for preset_id in ("lossless", "print600", "print300"):
-        result = compress.compress_pdf(
-            scan_pdf_1200dpi, tmp_path / "{0}.pdf".format(preset_id), preset_id
-        )
+        result = compress.compress_pdf(scan_pdf_1200dpi, tmp_path / "{0}.pdf".format(preset_id), preset_id)
         sizes[preset_id] = result.size_after
     assert sizes["lossless"] > sizes["print600"] > sizes["print300"]
 
 
-def test_print600_resamples_a_1200dpi_scan_down_to_about_600(
-    scan_pdf_1200dpi, tmp_path
-):
+def test_print600_resamples_a_1200dpi_scan_down_to_about_600(scan_pdf_1200dpi, tmp_path):
     result = compress.compress_pdf(scan_pdf_1200dpi, tmp_path / "out.pdf", "print600")
     assert result.resampled is True
     assert result.returned_original is False
@@ -184,9 +168,7 @@ def test_print600_leaves_an_already_600dpi_jpeg_scan_alone(scan_pdf_600dpi, tmp_
     assert result.size_after <= result.size_before
 
 
-def test_the_qfactor_is_what_shrinks_the_output_not_just_the_resolution_flags(
-    scan_pdf_600dpi, tmp_path
-):
+def test_the_qfactor_is_what_shrinks_the_output_not_just_the_resolution_flags(scan_pdf_600dpi, tmp_path):
     """The monotonic-ladder test above only proves resolution flags shrink the
     file; it would still pass green if Ghostscript silently ignored the -c
     QFactor snippet entirely (verified: stripping it and rerunning still gives
@@ -202,7 +184,7 @@ def test_the_qfactor_is_what_shrinks_the_output_not_just_the_resolution_flags(
     command_with = compress.build_command(scan_pdf_600dpi, dst_with, preset)
     command_without = compress.build_command(scan_pdf_600dpi, dst_without, preset)
     c_index = command_without.index("-c")
-    del command_without[c_index:c_index + 2]
+    del command_without[c_index : c_index + 2]
 
     subprocess.run(command_with, capture_output=True, text=True, timeout=120)
     subprocess.run(command_without, capture_output=True, text=True, timeout=120)
@@ -233,9 +215,7 @@ def test_a_vector_pdf_is_not_flagged_as_an_unreadable_scan(vector_pdf_2pages, tm
     assert not any(str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings)
 
 
-def test_a_low_resolution_scan_still_warns_below_floor_even_when_not_resampled(
-    scan_pdf_150dpi, tmp_path
-):
+def test_a_low_resolution_scan_still_warns_below_floor_even_when_not_resampled(scan_pdf_150dpi, tmp_path):
     """A 150 dpi scan through print300 takes the "already at target" path
     (resample=False, no downsampling happens), but the *output* still sits at
     150 dpi -- below the print floor -- and the guardrail must say so
@@ -257,9 +237,7 @@ def test_an_already_minimal_pdf_is_returned_unchanged(tiny_pdf, tmp_path):
     assert any("optimis" in warning.lower() for warning in result.warnings)
 
 
-def test_returned_original_path_reports_no_resampling_and_no_stale_floor_warning(
-    tiny_pdf, tmp_path
-):
+def test_returned_original_path_reports_no_resampling_and_no_stale_floor_warning(tiny_pdf, tmp_path):
     """When Ghostscript's re-encode comes out larger, the original is kept --
     but before this fix, ``resampled`` still reported the pre-run intent and
     a below-floor warning could describe resampling that never actually
@@ -279,9 +257,7 @@ def test_returned_original_path_reports_no_resampling_and_no_stale_floor_warning
         median_ppi=1000,
         max_ppi=1000,
     )
-    result = compress.compress_pdf(
-        tiny_pdf, tmp_path / "out.pdf", "print300", profile=high_res_scan
-    )
+    result = compress.compress_pdf(tiny_pdf, tmp_path / "out.pdf", "print300", profile=high_res_scan)
     assert result.returned_original is True
     assert result.resampled is False
     assert not any(str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings)
@@ -321,9 +297,7 @@ def test_a_corrupt_pdf_raises_with_ghostscript_stderr(tmp_path):
         max_ppi=None,
     )
     with pytest.raises(compress.ToolError) as excinfo:
-        compress.compress_pdf(
-            broken, tmp_path / "out.pdf", "print300", profile=dummy_profile
-        )
+        compress.compress_pdf(broken, tmp_path / "out.pdf", "print300", profile=dummy_profile)
     assert excinfo.value.stderr != ""
     assert "ghostscript" in str(excinfo.value).lower()
 
@@ -364,9 +338,7 @@ def test_lossless_preset_does_not_jpeg_encode_a_flate_source(flate_gray_pdf, tmp
 # policy gets a direct test on both its legs.
 
 
-def test_a_flate_source_at_the_target_is_not_jpeg_encoded_by_a_print_preset(
-    flate_gray_pdf, tmp_path
-):
+def test_a_flate_source_at_the_target_is_not_jpeg_encoded_by_a_print_preset(flate_gray_pdf, tmp_path):
     """The end-to-end half of the skip-resample filter policy: a 150 dpi Flate
     scan through ``print300`` takes guardrail (a)'s no-resample path, and must
     come back with its lossless encoding intact. On the regressed build this
@@ -381,9 +353,7 @@ def test_a_flate_source_at_the_target_is_not_jpeg_encoded_by_a_print_preset(
     assert "jpeg" not in image_encodings(destination)
 
 
-def test_a_mixed_resolution_scan_is_judged_by_its_worst_page(
-    mixed_resolution_scan_pdf, tmp_path
-):
+def test_a_mixed_resolution_scan_is_judged_by_its_worst_page(mixed_resolution_scan_pdf, tmp_path):
     """A 600 dpi page next to a 100 dpi page, through the *default* preset.
 
     ``max_ppi`` is 600, so resampling proceeds and the preset's own target
@@ -402,18 +372,12 @@ def test_a_mixed_resolution_scan_is_judged_by_its_worst_page(
     assert min(ppi_values) <= 110
 
     assert result.below_print_floor is True
-    floor_warnings = [
-        warning
-        for warning in result.warnings
-        if str(compress.PRINT_DPI_FLOOR) in warning
-    ]
+    floor_warnings = [warning for warning in result.warnings if str(compress.PRINT_DPI_FLOOR) in warning]
     assert len(floor_warnings) == 1
     assert "100 dpi" in floor_warnings[0]
 
 
-def test_one_low_res_scan_page_in_a_text_bundle_is_still_reported(
-    text_bundle_with_one_low_res_scan_page, tmp_path
-):
+def test_one_low_res_scan_page_in_a_text_bundle_is_still_reported(text_bundle_with_one_low_res_scan_page, tmp_path):
     """A mostly-text document is not a "scan", but its one scanned page still
     prints at 100 dpi.
 
@@ -427,24 +391,16 @@ def test_one_low_res_scan_page_in_a_text_bundle_is_still_reported(
     source_profile = profile_pdf(text_bundle_with_one_low_res_scan_page)
     assert source_profile.is_scan is False, "fixture must not read as a whole-doc scan"
 
-    result = compress.compress_pdf(
-        text_bundle_with_one_low_res_scan_page, destination, "print300"
-    )
+    result = compress.compress_pdf(text_bundle_with_one_low_res_scan_page, destination, "print300")
 
     assert min(image_ppi_values(destination)) <= 110
     assert result.below_print_floor is True
-    floor_warnings = [
-        warning
-        for warning in result.warnings
-        if str(compress.PRINT_DPI_FLOOR) in warning
-    ]
+    floor_warnings = [warning for warning in result.warnings if str(compress.PRINT_DPI_FLOOR) in warning]
     assert len(floor_warnings) == 1
     assert "100 dpi" in floor_warnings[0]
 
 
-def test_a_uniform_600dpi_scan_through_print300_stays_above_the_floor(
-    scan_pdf_600dpi, tmp_path
-):
+def test_a_uniform_600dpi_scan_through_print300_stays_above_the_floor(scan_pdf_600dpi, tmp_path):
     """The other side of the measurement: every page really does land above
     the floor, so nothing is reported."""
     destination = tmp_path / "out.pdf"
@@ -453,42 +409,30 @@ def test_a_uniform_600dpi_scan_through_print300_stays_above_the_floor(
     for ppi in image_ppi_values(destination):
         assert ppi >= compress.PRINT_DPI_FLOOR
     assert result.below_print_floor is False
-    assert not any(
-        str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings
-    )
+    assert not any(str(compress.PRINT_DPI_FLOOR) in warning for warning in result.warnings)
 
 
-def test_the_below_floor_warning_blames_the_source_not_the_setting(
-    scan_pdf_150dpi, tmp_path
-):
+def test_the_below_floor_warning_blames_the_source_not_the_setting(scan_pdf_150dpi, tmp_path):
     """With the lowest target at 300 dpi, no preset can put a page below the
     floor -- Ghostscript never downsamples below the target. So a below-floor
     result always means the page arrived that way, and the warning must say so
     rather than suggesting a different setting the user could pick.
     """
     result = compress.compress_pdf(scan_pdf_150dpi, tmp_path / "out.pdf", "print300")
-    floor_warnings = [
-        warning
-        for warning in result.warnings
-        if str(compress.PRINT_DPI_FLOOR) in warning
-    ]
+    floor_warnings = [warning for warning in result.warnings if str(compress.PRINT_DPI_FLOOR) in warning]
     assert len(floor_warnings) == 1
     assert "150 dpi" in floor_warnings[0]
     assert "no compression level can improve it" in floor_warnings[0]
     assert "Re-run at" not in floor_warnings[0]
 
 
-def test_no_preset_can_push_a_printable_scan_below_the_floor(
-    scan_pdf_600dpi, tmp_path
-):
+def test_no_preset_can_push_a_printable_scan_below_the_floor(scan_pdf_600dpi, tmp_path):
     """The structural guarantee that removing the screen preset bought: every
     remaining level targets 300 dpi or better, so a source that starts above
     the floor stays above it whichever level the user picks.
     """
     for preset_id in sorted(compress.PRESETS):
-        result = compress.compress_pdf(
-            scan_pdf_600dpi, tmp_path / "{0}.pdf".format(preset_id), preset_id
-        )
+        result = compress.compress_pdf(scan_pdf_600dpi, tmp_path / "{0}.pdf".format(preset_id), preset_id)
         measured = image_ppi_values(result.output_path)
         assert measured, "expected at least one image in {0}".format(preset_id)
         assert min(measured) >= compress.PRINT_DPI_FLOOR, preset_id

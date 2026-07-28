@@ -4,6 +4,7 @@ Everything is generated at test time with Pillow or by hand-assembling PDF
 bytes, so the repository carries no binary test assets and the fixtures stay
 readable and adjustable.
 """
+
 import random
 import zlib
 
@@ -40,8 +41,18 @@ def _render_text_page(width, height, mode="L"):
     draw = ImageDraw.Draw(image)
     font = _font(max(12, height // 60))
     rng = random.Random(1234)
-    words = ["compression", "legible", "printer", "resample", "document",
-             "quality", "threshold", "embedded", "grayscale", "resolution"]
+    words = [
+        "compression",
+        "legible",
+        "printer",
+        "resample",
+        "document",
+        "quality",
+        "threshold",
+        "embedded",
+        "grayscale",
+        "resolution",
+    ]
     margin = width // 12
     y = margin
     line_height = max(16, height // 45)
@@ -104,9 +115,7 @@ def mixed_resolution_scan_pdf(tmp_path):
     pages = []
     for dpi in (600, 100):
         image = _render_text_page(5 * dpi, 7 * dpi, mode="L")
-        pages.append(
-            _save_image_pdf(image, tmp_path / "_mixed_{0}.pdf".format(dpi), dpi)
-        )
+        pages.append(_save_image_pdf(image, tmp_path / "_mixed_{0}.pdf".format(dpi), dpi))
 
     writer = PdfWriter()
     for page_pdf in pages:
@@ -173,9 +182,7 @@ def _build_pdf_bytes(objects):
     out += b"0000000000 65535 f \n"
     for number in range(1, size):
         out += "{0:010d} 00000 n \n".format(offsets[number]).encode("ascii")
-    out += "trailer\n<< /Size {0} /Root 1 0 R >>\nstartxref\n{1}\n%%EOF\n".format(
-        size, xref_offset
-    ).encode("ascii")
+    out += "trailer\n<< /Size {0} /Root 1 0 R >>\nstartxref\n{1}\n%%EOF\n".format(size, xref_offset).encode("ascii")
     return bytes(out)
 
 
@@ -209,17 +216,19 @@ def _flate_gray_pdf(path, width, height, page_size):
     compressed = zlib.compress(raw, 6)
 
     image_obj = (
-        "<< /Type /XObject /Subtype /Image /Width {0} /Height {1} "
-        "/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode "
-        "/Length {2} >>\nstream\n"
-    ).format(width, height, len(compressed)).encode("ascii") + compressed + b"\nendstream"
-
-    content = "q {0} 0 0 {1} 0 0 cm /Im0 Do Q".format(page_width, page_height).encode("ascii")
-    content_obj = (
-        "<< /Length {0} >>\nstream\n".format(len(content)).encode("ascii")
-        + content
+        (
+            "<< /Type /XObject /Subtype /Image /Width {0} /Height {1} "
+            "/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode "
+            "/Length {2} >>\nstream\n"
+        )
+        .format(width, height, len(compressed))
+        .encode("ascii")
+        + compressed
         + b"\nendstream"
     )
+
+    content = "q {0} 0 0 {1} 0 0 cm /Im0 Do Q".format(page_width, page_height).encode("ascii")
+    content_obj = "<< /Length {0} >>\nstream\n".format(len(content)).encode("ascii") + content + b"\nendstream"
 
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -227,7 +236,9 @@ def _flate_gray_pdf(path, width, height, page_size):
         (
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {0} {1}] "
             "/Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>"
-        ).format(page_width, page_height).encode("ascii"),
+        )
+        .format(page_width, page_height)
+        .encode("ascii"),
         image_obj,
         content_obj,
     ]
@@ -269,17 +280,19 @@ def _vector_pdf(path, markers, page_size=(612, 792)):
             (
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {2} {3}] "
                 "/Resources << /Font << /F1 {0} 0 R >> >> /Contents {1} 0 R >>"
-            ).format(font_number, content_number, page_width, page_height).encode("ascii")
+            )
+            .format(font_number, content_number, page_width, page_height)
+            .encode("ascii")
         )
         stream = (
-            "BT /F1 24 Tf 72 {1:.0f} Td ({0}) Tj ET\n"
-            "BT /F1 11 Tf 72 {2:.0f} Td (Vector body text that must stay sharp.) Tj ET\n"
-        ).format(marker, top_y, body_y).encode("ascii")
-        objects.append(
-            "<< /Length {0} >>\nstream\n".format(len(stream)).encode("ascii")
-            + stream
-            + b"endstream"
+            (
+                "BT /F1 24 Tf 72 {1:.0f} Td ({0}) Tj ET\n"
+                "BT /F1 11 Tf 72 {2:.0f} Td (Vector body text that must stay sharp.) Tj ET\n"
+            )
+            .format(marker, top_y, body_y)
+            .encode("ascii")
         )
+        objects.append("<< /Length {0} >>\nstream\n".format(len(stream)).encode("ascii") + stream + b"endstream")
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
     with open(path, "wb") as handle:
@@ -324,9 +337,7 @@ def ocr_scan_pdf(tmp_path):
     """
     image = _render_text_page(5 * 300, 7 * 300, mode="L")
     image_path = _save_image_pdf(image, tmp_path / "_ocr_image.pdf", 300)
-    text_path = _vector_pdf(
-        tmp_path / "_ocr_text.pdf", ["OCR-LAYER"], page_size=_OCR_PAGE_SIZE
-    )
+    text_path = _vector_pdf(tmp_path / "_ocr_text.pdf", ["OCR-LAYER"], page_size=_OCR_PAGE_SIZE)
 
     text_page = PdfReader(str(text_path)).pages[0]
 
@@ -350,9 +361,7 @@ def mixed_scan_and_text_pdf(tmp_path):
     exercises the "most pages must be scan pages" fraction rather than a
     "does any page look like a scan" check.
     """
-    text_path = _vector_pdf(
-        tmp_path / "_mixed_text.pdf", ["MARKER-1", "MARKER-2"], page_size=_OCR_PAGE_SIZE
-    )
+    text_path = _vector_pdf(tmp_path / "_mixed_text.pdf", ["MARKER-1", "MARKER-2"], page_size=_OCR_PAGE_SIZE)
     image = _render_text_page(5 * 300, 7 * 300, mode="L")
     image_path = _save_image_pdf(image, tmp_path / "_mixed_image.pdf", 300)
 

@@ -5,9 +5,11 @@ only difference visible in the pair is the compression itself. The UI shows the
 crops at 1:1 to keep the browser from resampling away the artefacts that
 matter.
 """
+
+import dataclasses
 import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from PIL import Image
 
@@ -29,6 +31,21 @@ CROP_SIZE = (400, 560)
 _CROP_TOP_FRACTION = 0.22
 
 
+@dataclasses.dataclass(frozen=True)
+class Comparison:
+    """The before/after crop pair, plus what was rendered to produce it.
+
+    A dataclass rather than a dict: callers read ``before``/``after`` as real
+    paths, and a ``Dict[str, object]`` return forced every one of them to know
+    the value types without being able to state them.
+    """
+
+    before: Path
+    after: Path
+    page: int
+    dpi: int
+
+
 def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:
     """Render one page to PNG with pdftoppm and return the written file."""
     out_prefix = Path(out_prefix)
@@ -47,9 +64,7 @@ def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:
         str(out_prefix),
     ]
     try:
-        completed = subprocess.run(
-            command, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS
-        )
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
         # Every other shell-out in this package converts a timeout into a
         # ToolError; without this a 120 s pdftoppm on a huge page reaches the
@@ -94,7 +109,7 @@ def choose_page(profile: PdfProfile) -> int:
     return pages[0] if pages else 1
 
 
-def build_comparison(src_pdf, out_pdf, dest_dir, page: Optional[int] = None) -> Dict[str, object]:
+def build_comparison(src_pdf, out_pdf, dest_dir, page: Optional[int] = None) -> Comparison:
     """Render and crop the same region from both PDFs at the same dpi."""
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -124,9 +139,7 @@ def build_comparison(src_pdf, out_pdf, dest_dir, page: Optional[int] = None) -> 
         # its own limits, or a disk error writing the crops, surfaced as a raw
         # traceback and a generic HTTP 500 instead of a reportable failure.
         except (OSError, ValueError, Image.DecompressionBombError) as exc:
-            raise ToolError(
-                "Could not crop the comparison for page {0}: {1}".format(page, exc)
-            ) from exc
+            raise ToolError("Could not crop the comparison for page {0}: {1}".format(page, exc)) from exc
     finally:
         # These are intermediate full-page renders, not the function's
         # return values -- remove them whether we succeeded or raised partway
@@ -136,4 +149,4 @@ def build_comparison(src_pdf, out_pdf, dest_dir, page: Optional[int] = None) -> 
             if full_render is not None and full_render.exists():
                 full_render.unlink()
 
-    return {"before": before_crop, "after": after_crop, "page": page, "dpi": PREVIEW_DPI}
+    return Comparison(before=before_crop, after=after_crop, page=page, dpi=PREVIEW_DPI)

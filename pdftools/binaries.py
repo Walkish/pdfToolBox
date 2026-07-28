@@ -3,6 +3,7 @@
 Everything here fails loudly and early. A missing binary surfaces as a clear
 install instruction at startup rather than as a traceback on first upload.
 """
+
 import shutil
 import subprocess
 from typing import Dict
@@ -22,11 +23,7 @@ class MissingBinary(RuntimeError):
     """Raised when a required external binary is not on PATH."""
 
     def __init__(self, name: str, install_hint: str):
-        super().__init__(
-            "Required binary {0!r} was not found on PATH. Install it with: {1}".format(
-                name, install_hint
-            )
-        )
+        super().__init__("Required binary {0!r} was not found on PATH. Install it with: {1}".format(name, install_hint))
         self.name = name
         self.install_hint = install_hint
 

@@ -1,4 +1,5 @@
 """Tests for external binary discovery."""
+
 import pytest
 
 from pdftools import binaries

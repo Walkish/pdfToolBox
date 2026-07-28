@@ -4,6 +4,7 @@ pypdf copies page objects without re-encoding their content streams, so
 merging costs no quality. Order is exactly the order given: the caller owns
 the ordering decision and this module never re-sorts.
 """
+
 from pathlib import Path
 from typing import List
 
@@ -27,9 +28,7 @@ def merge_pdfs(paths: List[Path], dst) -> Path:
                 # An empty user password covers the common "owner-locked but
                 # readable" case; anything else needs a password we do not have.
                 if reader.decrypt("") == 0:
-                    raise ToolError(
-                        "{0} is password protected and cannot be merged".format(path.name)
-                    )
+                    raise ToolError("{0} is password protected and cannot be merged".format(path.name))
             for page in reader.pages:
                 writer.add_page(page)
         except ToolError:

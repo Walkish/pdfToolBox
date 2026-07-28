@@ -1,4 +1,5 @@
 """Route-level tests via the Flask test client."""
+
 import io
 import zipfile
 
@@ -113,9 +114,7 @@ def test_one_bad_file_does_not_fail_the_batch(client, scan_pdf_600dpi):
     assert payload["zip_url"] is not None
 
 
-def test_two_uploads_sharing_a_filename_produce_two_distinct_results(
-    client, scan_pdf_600dpi, scan_pdf_150dpi
-):
+def test_two_uploads_sharing_a_filename_produce_two_distinct_results(client, scan_pdf_600dpi, scan_pdf_150dpi):
     payload = client.post(
         "/api/compress",
         data={
@@ -132,9 +131,7 @@ def test_two_uploads_sharing_a_filename_produce_two_distinct_results(
     assert first["download_url"] != second["download_url"]
     # The two sources differ in size, so a collision would show up as
     # identical downloads.
-    assert client.get(first["download_url"]).get_data() != client.get(
-        second["download_url"]
-    ).get_data()
+    assert client.get(first["download_url"]).get_data() != client.get(second["download_url"]).get_data()
 
 
 def test_an_unknown_preset_is_a_400(client, scan_pdf_600dpi):
@@ -147,9 +144,7 @@ def test_an_unknown_preset_is_a_400(client, scan_pdf_600dpi):
 
 
 def test_a_request_with_no_files_is_a_400(client):
-    response = client.post(
-        "/api/compress", data={"preset": "print300"}, content_type="multipart/form-data"
-    )
+    response = client.post("/api/compress", data={"preset": "print300"}, content_type="multipart/form-data")
     assert response.status_code == 400
 
 
@@ -279,9 +274,7 @@ def test_an_over_long_upload_filename_does_not_fail_the_batch(client, scan_pdf_6
     assert client.get(by_name[long_name]["download_url"]).status_code == 200
 
 
-def test_an_over_long_output_name_on_merge_yields_a_usable_download(
-    client, vector_pdf_factory
-):
+def test_an_over_long_output_name_on_merge_yields_a_usable_download(client, vector_pdf_factory):
     first = vector_pdf_factory(["ALPHA"])
     second = vector_pdf_factory(["BETA"])
     response = client.post(
@@ -312,9 +305,7 @@ def test_an_over_long_output_name_on_images_yields_a_usable_download(client, png
     assert client.get(result["download_url"]).get_data()[:5] == b"%PDF-"
 
 
-def test_merge_with_compress_advertises_a_preview_url_that_actually_resolves(
-    client, scan_pdf_600dpi
-):
+def test_merge_with_compress_advertises_a_preview_url_that_actually_resolves(client, scan_pdf_600dpi):
     payload = client.post(
         "/api/merge",
         data={
@@ -342,9 +333,7 @@ def test_error_bodies_are_json_with_a_description(client, scan_pdf_600dpi):
     assert unknown_preset.is_json
     assert "ludicrous" in unknown_preset.get_json()["description"]
 
-    no_files = client.post(
-        "/api/compress", data={"preset": "print300"}, content_type="multipart/form-data"
-    )
+    no_files = client.post("/api/compress", data={"preset": "print300"}, content_type="multipart/form-data")
     assert no_files.status_code == 400
     assert no_files.is_json
     assert no_files.get_json()["description"]
@@ -375,15 +364,11 @@ def corrupt_but_headered_pdf(tmp_path):
     ``profile_pdf`` call and raises a ``ToolError``.
     """
     path = tmp_path / "trunc.pdf"
-    path.write_bytes(
-        b"%PDF-1.4\nthis is garbage, not a real pdf body, no xref, no trailer.\n%%EOF"
-    )
+    path.write_bytes(b"%PDF-1.4\nthis is garbage, not a real pdf body, no xref, no trailer.\n%%EOF")
     return path
 
 
-def test_a_tool_error_does_not_leak_the_internal_on_disk_path(
-    client, corrupt_but_headered_pdf
-):
+def test_a_tool_error_does_not_leak_the_internal_on_disk_path(client, corrupt_but_headered_pdf):
     payload = client.post(
         "/api/compress",
         data={"files": [upload(corrupt_but_headered_pdf, "trunc.pdf")], "preset": "print300"},
@@ -398,9 +383,7 @@ def test_a_tool_error_does_not_leak_the_internal_on_disk_path(
     assert "/inputs/" not in result["error"]
 
 
-def test_a_failed_preview_uses_the_standard_envelope_and_leaks_no_paths(
-    client, tmp_path, scan_pdf_600dpi
-):
+def test_a_failed_preview_uses_the_standard_envelope_and_leaks_no_paths(client, tmp_path, scan_pdf_600dpi):
     """Measured before the fix, this route answered
     ``500 {"error": "pdfimages exited with status 1 on
     <tmp>/jobs/<id>/inputs/000_scan.pdf"}`` -- the only route with no
@@ -452,9 +435,7 @@ def test_a_wrong_method_still_advertises_the_methods_it_allows(client):
     assert response.get_json()["description"]
 
 
-def test_an_image_bomb_fails_its_own_row_and_leaves_the_batch_alone(
-    client, png_past_pillows_own_ceiling, png_rgba
-):
+def test_an_image_bomb_fails_its_own_row_and_leaves_the_batch_alone(client, png_past_pillows_own_ceiling, png_rgba):
     """Measured before the fix: a 511 KB PNG declaring 484 megapixels made the
     whole request answer 500 {"error":"Internal Server Error"} -- Pillow's
     DecompressionBombError was raised inside Image.open and escaped both

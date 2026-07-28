@@ -12,6 +12,7 @@ files this module exists to protect. A page is a scan page when a raster
 image covers essentially all of it; a document is a scan when most of its
 pages are scan pages.
 """
+
 import dataclasses
 import math
 import re
@@ -127,21 +128,15 @@ def _run(args: List[str], path: Path) -> str:
     """Run an external tool and return its stdout, raising ToolError on failure."""
     binary_name = Path(args[0]).name
     try:
-        completed = subprocess.run(
-            args, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS
-        )
+        completed = subprocess.run(args, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
         raise ToolError(
-            "{0} timed out after {1}s on {2}".format(
-                binary_name, binaries.TIMEOUT_SECONDS, path
-            ),
+            "{0} timed out after {1}s on {2}".format(binary_name, binaries.TIMEOUT_SECONDS, path),
             stderr=str(exc),
         ) from exc
     if completed.returncode != 0:
         raise ToolError(
-            "{0} exited with status {1} on {2}".format(
-                binary_name, completed.returncode, path
-            ),
+            "{0} exited with status {1} on {2}".format(binary_name, completed.returncode, path),
             stderr=completed.stderr or completed.stdout,
         )
     return completed.stdout
@@ -159,9 +154,7 @@ def _page_sizes(path: Path, page_count: int) -> Dict[int, Tuple[float, float]]:
     """Return {page number: (width pt, height pt)} for every page."""
     if page_count <= 0:
         return {}
-    output = _run(
-        [binaries.find("pdfinfo"), "-f", "1", "-l", str(page_count), str(path)], path
-    )
+    output = _run([binaries.find("pdfinfo"), "-f", "1", "-l", str(page_count), str(path)], path)
     sizes = {}
     default_size = None
     for line in output.splitlines():
@@ -178,9 +171,7 @@ def _page_sizes(path: Path, page_count: int) -> Dict[int, Tuple[float, float]]:
     return sizes
 
 
-def _with_coverage(
-    image: ImageInfo, page_sizes: Dict[int, Tuple[float, float]]
-) -> ImageInfo:
+def _with_coverage(image: ImageInfo, page_sizes: Dict[int, Tuple[float, float]]) -> ImageInfo:
     """Return a copy of ``image`` with ``coverage`` filled in, if computable."""
     page_size = page_sizes.get(image.page)
     if image.ppi is None or image.ppi <= 0 or page_size is None:
@@ -191,9 +182,7 @@ def _with_coverage(
         return image
     image_width_pt = (image.width / image.ppi) * 72.0
     image_height_pt = (image.height / image.ppi) * 72.0
-    return dataclasses.replace(
-        image, coverage=(image_width_pt * image_height_pt) / page_area
-    )
+    return dataclasses.replace(image, coverage=(image_width_pt * image_height_pt) / page_area)
 
 
 def _extracted_text(path: Path) -> str:
@@ -223,9 +212,7 @@ def scan_floor_ppi(path) -> Optional[float]:
     one with no raster images at all).
     """
     path = Path(path)
-    images = parse_pdfimages_list(
-        _run([binaries.find("pdfimages"), "-list", str(path)], path)
-    )
+    images = parse_pdfimages_list(_run([binaries.find("pdfimages"), "-list", str(path)], path))
     last_page_with_image = max((image.page for image in images), default=0)
     if last_page_with_image <= 0:
         return None
@@ -235,9 +222,7 @@ def scan_floor_ppi(path) -> Optional[float]:
     scan_page_ppi = [
         measured.ppi
         for measured in (_with_coverage(image, page_sizes) for image in images)
-        if measured.ppi is not None
-        and measured.coverage is not None
-        and measured.coverage >= SCAN_COVERAGE_THRESHOLD
+        if measured.ppi is not None and measured.coverage is not None and measured.coverage >= SCAN_COVERAGE_THRESHOLD
     ]
     return min(scan_page_ppi) if scan_page_ppi else None
 
@@ -245,9 +230,7 @@ def scan_floor_ppi(path) -> Optional[float]:
 def profile_pdf(path) -> PdfProfile:
     """Inspect ``path`` and return everything the compressor needs to decide."""
     path = Path(path)
-    images = parse_pdfimages_list(
-        _run([binaries.find("pdfimages"), "-list", str(path)], path)
-    )
+    images = parse_pdfimages_list(_run([binaries.find("pdfimages"), "-list", str(path)], path))
     pages_from_images = max((image.page for image in images), default=0)
     page_count = _page_count(path) or pages_from_images
 
@@ -266,9 +249,7 @@ def profile_pdf(path) -> PdfProfile:
     # A scan page is one whose raster image covers essentially the whole
     # page. A document is a scan when most of its pages are scan pages.
     scan_pages = {
-        image.page
-        for image in images
-        if image.coverage is not None and image.coverage >= SCAN_COVERAGE_THRESHOLD
+        image.page for image in images if image.coverage is not None and image.coverage >= SCAN_COVERAGE_THRESHOLD
     }
     required_scan_pages = max(1, math.ceil(SCAN_PAGE_FRACTION * page_count))
     is_scan = page_count > 0 and len(scan_pages) >= required_scan_pages

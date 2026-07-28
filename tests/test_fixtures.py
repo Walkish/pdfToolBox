@@ -1,13 +1,12 @@
 """The fixtures are inputs to every other test, so they are verified themselves."""
+
 import subprocess
 
 from PIL import Image
 
 
 def _pdftotext(path):
-    completed = subprocess.run(
-        ["pdftotext", str(path), "-"], capture_output=True, text=True, timeout=120
-    )
+    completed = subprocess.run(["pdftotext", str(path), "-"], capture_output=True, text=True, timeout=120)
     return completed.stdout
 
 
@@ -43,9 +42,7 @@ def test_vector_factory_builds_the_requested_markers(vector_pdf_factory):
 
 
 def test_cmyk_fixture_page_image_is_cmyk(cmyk_pdf):
-    listing = subprocess.run(
-        ["pdfimages", "-list", str(cmyk_pdf)], capture_output=True, text=True, timeout=120
-    ).stdout
+    listing = subprocess.run(["pdfimages", "-list", str(cmyk_pdf)], capture_output=True, text=True, timeout=120).stdout
     assert "cmyk" in listing.lower()
 
 

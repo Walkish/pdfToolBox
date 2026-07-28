@@ -3,6 +3,7 @@
 Routes stay thin: validate the upload, call one pdftools function, shape JSON.
 All real behaviour lives in pdftools/ and is tested without Flask.
 """
+
 import os
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,6 +12,7 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 from pdftools import binaries, compress, images, jobs, merge, preview, validate
+
 # Imported from its own module rather than as compress.ToolError: merge,
 # images and preview raise this same class, and naming it after compress
 # implies a dependency on compress that none of them have.
@@ -19,6 +21,10 @@ from pdftools.errors import ToolError
 _DEBUG_TRUE_VALUES = ("1", "true", "yes")
 
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024
+# Named once and used both to configure Flask and to serve the index, rather
+# than read back off ``application.static_folder`` -- which Flask types as
+# Optional, so reading it back loses the guarantee that it is set.
+STATIC_FOLDER = "static"
 HOST = "127.0.0.1"
 # 5001 and 5000 are both bad defaults on macOS: 5000 is commonly held by
 # AirPlay Receiver and 5001 by Docker's own port-forwarding daemon, so a
@@ -83,9 +89,7 @@ def _saved_uploads(job, kind: str) -> List[Dict]:
                 validate.validate_image_file(target, display_name)
         except validate.ValidationError as exc:
             target.unlink(missing_ok=True)
-            records.append(
-                {"error": str(exc), "name": display_name, "position": position}
-            )
+            records.append({"error": str(exc), "name": display_name, "position": position})
             continue
         records.append({"path": target, "name": display_name, "position": position})
     return records
@@ -204,7 +208,7 @@ def _payload(job, results: List[Dict]) -> Dict:
 
 
 def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
-    application = Flask(__name__, static_folder="static", static_url_path="/static")
+    application = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path="/static")
     application.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     store = job_store if job_store is not None else jobs.JobStore()
 
@@ -227,7 +231,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
 
     @application.route("/")
     def index():
-        return send_from_directory(application.static_folder, "index.html")
+        return send_from_directory(STATIC_FOLDER, "index.html")
 
     @application.route("/api/presets")
     def presets():
@@ -282,8 +286,10 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         # validates first for the same reason -- a bad preset must not burn
         # a real merge and then 400, abandoning a written output to the TTL
         # sweep.
-        want_compress = request.form.get("compress") == "1"
-        preset = _requested_preset() if want_compress else None
+        # ``compress_preset`` doubles as the "was compression requested"
+        # flag: the branch below tests it for None, so the value the branch
+        # uses cannot be None by construction.
+        compress_preset = _requested_preset() if request.form.get("compress") == "1" else None
 
         job = store.create()
         records = _saved_uploads(job, "pdf")
@@ -297,29 +303,23 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         if not usable:
             return jsonify(_payload(job, results))
 
-        output_name = validate.normalize_output_name(
-            request.form.get("output_name", ""), "merged.pdf"
-        )
+        output_name = validate.normalize_output_name(request.form.get("output_name", ""), "merged.pdf")
         merged = job.outputs / output_name
         try:
             merge.merge_pdfs([record["path"] for record in usable], merged)
         except (ToolError, ValueError, OSError) as exc:
-            message = _redact(
-                str(exc), *[(record["path"], record["name"]) for record in usable]
-            )
+            message = _redact(str(exc), *[(record["path"], record["name"]) for record in usable])
             results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
             return jsonify(_payload(job, results))
 
-        if want_compress:
+        if compress_preset is not None:
             staged = job.root / "merged_raw.pdf"
             merged.replace(staged)
             try:
-                result = compress.compress_pdf(staged, merged, preset.id)
+                result = compress.compress_pdf(staged, merged, compress_preset.id)
             except (ToolError, OSError) as exc:
                 message = _redact(str(exc), (staged, output_name))
-                results.append(
-                    _failure(output_name, message, getattr(exc, "stderr", ""))
-                )
+                results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
                 return jsonify(_payload(job, results))
             # The compressed merge result keeps its pre-compression source
             # so /api/preview can render a before/after comparison for it,
@@ -327,7 +327,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             # preview_url _success advertises 404s for exactly the rows
             # where a legibility warning makes the user want to check.
             index = job.add_output(merged, output_name, {"source": str(staged)})
-            results.append(_success(job, index, output_name, result, preset))
+            results.append(_success(job, index, output_name, result, compress_preset))
         else:
             index = job.add_output(merged, output_name)
             results.append(_plain_success(job, index, output_name, merged))
@@ -347,18 +347,12 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         if not usable:
             return jsonify(_payload(job, results))
 
-        output_name = validate.normalize_output_name(
-            request.form.get("output_name", ""), "images.pdf"
-        )
+        output_name = validate.normalize_output_name(request.form.get("output_name", ""), "images.pdf")
         destination = job.outputs / output_name
         try:
-            images.images_to_pdf(
-                [record["path"] for record in usable], destination, work_dir=job.root
-            )
+            images.images_to_pdf([record["path"] for record in usable], destination, work_dir=job.root)
         except (ToolError, ValueError, OSError) as exc:
-            message = _redact(
-                str(exc), *[(record["path"], record["name"]) for record in usable]
-            )
+            message = _redact(str(exc), *[(record["path"], record["name"]) for record in usable])
             results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
             return jsonify(_payload(job, results))
         index = job.add_output(destination, output_name)
@@ -402,8 +396,8 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             {
                 "before": "/jobs/{0}/previews/{1}/before.png".format(job.id, index),
                 "after": "/jobs/{0}/previews/{1}/after.png".format(job.id, index),
-                "page": comparison["page"],
-                "dpi": comparison["dpi"],
+                "page": comparison.page,
+                "dpi": comparison.dpi,
             }
         )
 
@@ -459,9 +453,7 @@ def main():
     except binaries.MissingBinary as exc:
         missing = exc
     if missing is not None:
-        raise SystemExit(
-            "PDF Toolbox cannot start.\n{0}\n\nInstall it and try again.".format(missing)
-        )
+        raise SystemExit("PDF Toolbox cannot start.\n{0}\n\nInstall it and try again.".format(missing))
     try:
         port = resolve_port()
     except ValueError as exc:

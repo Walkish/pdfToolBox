@@ -5,6 +5,7 @@ letterboxing is added. Physical size follows the image's own dpi metadata when
 it has any, and falls back to 300 dpi otherwise, which keeps pages a sane size
 for printing instead of the 55-inch monsters a 72 dpi assumption produces.
 """
+
 import shutil
 import tempfile
 from pathlib import Path
@@ -51,9 +52,7 @@ def prepare_image(path) -> Tuple[Image.Image, float]:
             image = ImageOps.exif_transpose(opened)
             if image.mode == "CMYK":
                 return image.copy(), dpi
-            if image.mode in ("RGBA", "LA") or (
-                image.mode == "P" and "transparency" in image.info
-            ):
+            if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
                 # PDF pages have no transparency to fall back on, and the
                 # default fallback would be black.
                 rgba = image.convert("RGBA")
@@ -74,9 +73,7 @@ def prepare_image(path) -> Tuple[Image.Image, float]:
         ValueError,
         Image.DecompressionBombError,
     ) as exc:
-        raise ToolError(
-            "Could not read image {0}: {1}".format(path.name, exc)
-        ) from exc
+        raise ToolError("Could not read image {0}: {1}".format(path.name, exc)) from exc
 
 
 def images_to_pdf(paths: List[Path], dst, work_dir: Optional[Path] = None) -> Path:

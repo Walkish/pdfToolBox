@@ -1,4 +1,5 @@
 """Tests for job directories and output registration."""
+
 import os
 import shutil
 import time

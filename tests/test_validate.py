@@ -1,4 +1,5 @@
 """Tests for upload validation."""
+
 import warnings
 
 import pytest

@@ -1,4 +1,5 @@
 """Tests for order-preserving PDF merging."""
+
 import subprocess
 
 import pytest
@@ -7,15 +8,11 @@ from pdftools import compress, merge
 
 
 def extracted_text(pdf_path):
-    return subprocess.run(
-        ["pdftotext", str(pdf_path), "-"], capture_output=True, text=True, timeout=120
-    ).stdout
+    return subprocess.run(["pdftotext", str(pdf_path), "-"], capture_output=True, text=True, timeout=120).stdout
 
 
 def page_count(pdf_path):
-    output = subprocess.run(
-        ["pdfinfo", str(pdf_path)], capture_output=True, text=True, timeout=120
-    ).stdout
+    output = subprocess.run(["pdfinfo", str(pdf_path)], capture_output=True, text=True, timeout=120).stdout
     for line in output.splitlines():
         if line.startswith("Pages:"):
             return int(line.split(":", 1)[1].strip())
