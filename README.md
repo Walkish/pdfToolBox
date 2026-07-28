@@ -44,10 +44,21 @@ any port.
 
 | Level | Images resampled to | Use for |
 | --- | --- | --- |
+| Print 600 dpi | 600 dpi | Archival and fine detail; saves least |
 | Print 300 dpi (default) | 300 dpi | Anything going to a printer or a press |
-| Print 200 dpi | 200 dpi | Office printing when 300 dpi is too heavy |
-| Screen 150 dpi | 150 dpi | Email and on-screen reading — **not for print** |
 | Lossless | not touched | Structure-only compression, identical quality |
+
+Every level is print-safe: the lowest target is 300 dpi, well above the 200 dpi
+floor, so no setting here can make a document unprintable. The levels differ in
+resolution, not in JPEG quality — both print levels use the same quality, so a
+600 dpi result is strictly better than a 300 dpi one rather than a different
+trade-off.
+
+Ghostscript only resamples an image that exceeds the target by half again, so
+Print 600 dpi leaves a 600 dpi scan alone — and on an already-JPEG scan it
+passes the image through untouched rather than spending a JPEG generation for
+no saving. Expect it to shrink files that were scanned above 600 dpi, and to
+return most others unchanged.
 
 Text in born-digital PDFs is vector and stays sharp at every level; only
 embedded images are resampled. Scans are the exception, because there the image
@@ -55,7 +66,9 @@ resolution *is* the text resolution. Every compressed file is therefore
 re-measured afterwards, page by page: if any page whose image covers the whole
 sheet lands below 200 dpi you get a warning before you download it — including a
 mostly-text bundle where just one sheet came in at a low resolution — and the
-readability comparison lets you check the result at 1:1 first.
+readability comparison lets you check the result at 1:1 first. Since no level
+can put a page below the floor, that warning always means the page arrived that
+way and needs rescanning, not a different setting.
 
 Files whose images are already at or below the target are not resampled, and a
 file that would come out larger is returned unchanged.

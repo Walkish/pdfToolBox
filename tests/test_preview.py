@@ -50,7 +50,7 @@ def test_choose_page_falls_back_to_page_one_without_images():
 
 def test_comparison_produces_two_identically_sized_crops(scan_pdf_600dpi, tmp_path):
     compressed = tmp_path / "small.pdf"
-    compress.compress_pdf(scan_pdf_600dpi, compressed, "screen150")
+    compress.compress_pdf(scan_pdf_600dpi, compressed, "print300")
     result = preview.build_comparison(scan_pdf_600dpi, compressed, tmp_path / "preview")
     with Image.open(result["before"]) as before, Image.open(result["after"]) as after:
         assert before.size == after.size
@@ -61,7 +61,7 @@ def test_comparison_produces_two_identically_sized_crops(scan_pdf_600dpi, tmp_pa
 
 def test_comparison_of_a_harshly_compressed_scan_actually_differs(scan_pdf_600dpi, tmp_path):
     compressed = tmp_path / "small.pdf"
-    compress.compress_pdf(scan_pdf_600dpi, compressed, "screen150")
+    compress.compress_pdf(scan_pdf_600dpi, compressed, "print300")
     result = preview.build_comparison(scan_pdf_600dpi, compressed, tmp_path / "preview")
     before_bytes = result["before"].read_bytes()
     after_bytes = result["after"].read_bytes()

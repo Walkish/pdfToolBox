@@ -39,14 +39,26 @@ class Preset:
     print_safe: bool
 
 
-# QFactor values follow Distiller's print profiles, calibrated against
-# Ghostscript 10.7's actual pdfwrite output (see tests/test_compress.py):
-# lower is higher quality. Chroma subsampling stays off for the print
-# presets, because subsampling is what smears coloured text edges.
+# Every level here is print-safe: the lowest target is 300 dpi, comfortably
+# above the PRINT_DPI_FLOOR, so no preset can push a document below the floor.
+# A below-floor result can now only come from a source that was already too
+# low-resolution to print well, which no setting can undo.
+#
+# QFactor is the JPEG quality Ghostscript applies through setdistillerparams;
+# lower is better. Both print presets use 0.15, so they differ in resolution
+# rather than in quality — a 600 dpi output is then strictly better than a
+# 300 dpi one, never a different trade. Chroma subsampling stays off, because
+# subsampling is what smears coloured text edges.
+#
+# Measured against Ghostscript 10.7 (see tests/test_compress.py):
+#   1200 dpi scan  → print600 resamples to 600 dpi, -42%
+#   600 dpi Flate scan → print600 re-encodes at 600 dpi, -20%
+#   600 dpi JPEG scan  → print600 passes the JPEG through untouched, so the
+#                        rewrite comes out slightly larger and the original is
+#                        returned. No generation loss on an already-JPEG scan.
 PRESETS: Dict[str, Preset] = {
+    "print600": Preset("print600", "Print 600 dpi", 600, 1200, 0.15, "[1 1 1 1]", True),
     "print300": Preset("print300", "Print 300 dpi", 300, 600, 0.15, "[1 1 1 1]", True),
-    "print200": Preset("print200", "Print 200 dpi", 200, 600, 0.4, "[1 1 1 1]", True),
-    "screen150": Preset("screen150", "Screen 150 dpi", 150, 300, 0.76, "[2 1 1 2]", False),
     "lossless": Preset("lossless", "Lossless", None, None, None, "[1 1 1 1]", True),
 }
 
@@ -183,51 +195,23 @@ def build_command(src, dst, preset: Preset, resample: bool = True) -> List[str]:
     return command
 
 
-def _next_preset_up(preset: Preset) -> Optional[Preset]:
-    """The next print-safer rung above ``preset``: the resampling preset with
-    the smallest target above this one's.
+def _below_floor_warning(output_ppi: float) -> str:
+    """The below-floor warning, naming the measured resolution.
 
-    ``lossless`` is not a rung on that ladder -- it has no target at all --
-    and the top rung has nothing above it, so both return None.
+    It deliberately offers no "try a higher setting" advice, because with the
+    lowest target at 300 dpi no preset can produce a below-floor result:
+    Ghostscript never downsamples an image *below* the target, so a measured
+    floor under 200 dpi came from the source. The page arrived at that
+    resolution and no setting can restore detail that was never captured.
     """
-    if preset.image_dpi is None:
-        return None
-    higher = [
-        candidate
-        for candidate in PRESETS.values()
-        if candidate.image_dpi is not None and candidate.image_dpi > preset.image_dpi
-    ]
-    if not higher:
-        return None
-    return min(higher, key=lambda candidate: candidate.image_dpi)
-
-
-def _below_floor_warning(output_ppi: float, preset: Preset, resampled: bool) -> str:
-    """The below-floor warning, naming the measured dpi and -- where it would
-    actually help -- the preset to re-run at."""
-    message = (
-        "This looks like a scan at about {0} dpi, below the {1} dpi print "
-        "floor most printers need for small text to stay legible.".format(
+    return (
+        "A page here is about {0} dpi, below the {1} dpi print floor most "
+        "printers need for small text to stay legible. That is the resolution "
+        "the page arrived at, so no compression level can improve it -- "
+        "rescan it if this is going to a printer.".format(
             int(round(output_ppi)), PRINT_DPI_FLOOR
         )
     )
-    # Offering a higher preset only helps when this preset's target is what
-    # pinned the resolution down. Ghostscript never downsamples an image
-    # *below* the target, so a measured floor materially under the target came
-    # from the source -- a page that arrived low-resolution, which no preset
-    # can restore. Saying "use a higher setting" there would be false advice.
-    target_set_the_floor = (
-        resampled
-        and preset.image_dpi is not None
-        and output_ppi >= preset.image_dpi * 0.95
-    )
-    if target_set_the_floor:
-        higher = _next_preset_up(preset)
-        if higher is not None:
-            message += " Re-run at {0} or higher to stay above the floor.".format(
-                higher.label
-            )
-    return message
 
 
 def _timeout_stderr(exc) -> str:
@@ -355,7 +339,7 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
         output_floor_ppi is not None and output_floor_ppi < PRINT_DPI_FLOOR
     )
     if below_print_floor:
-        warnings.append(_below_floor_warning(output_floor_ppi, preset, resample))
+        warnings.append(_below_floor_warning(output_floor_ppi))
 
     return CompressResult(
         output_path=dst,

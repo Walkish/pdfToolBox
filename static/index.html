@@ -22,12 +22,10 @@
   <ul class="filelist" id="compress-list"></ul>
   <fieldset class="presets">
     <legend>Compression level</legend>
+    <label><input type="radio" name="compress-preset" value="print600">
+      <span>Print 600 dpi</span><small>Archival — keeps fine detail, saves least</small></label>
     <label><input type="radio" name="compress-preset" value="print300" checked>
       <span>Print 300 dpi</span><small>Safe for commercial print</small></label>
-    <label><input type="radio" name="compress-preset" value="print200">
-      <span>Print 200 dpi</span><small>Legible on any office printer</small></label>
-    <label><input type="radio" name="compress-preset" value="screen150">
-      <span>Screen 150 dpi</span><small class="warn">Not for print</small></label>
     <label><input type="radio" name="compress-preset" value="lossless">
       <span>Lossless</span><small>Structure only, images untouched</small></label>
   </fieldset>
@@ -48,12 +46,10 @@
   <label class="check"><input type="checkbox" id="merge-compress"> Compress the result</label>
   <fieldset class="presets" id="merge-presets" hidden>
     <legend>Compression level</legend>
+    <label><input type="radio" name="merge-preset" value="print600">
+      <span>Print 600 dpi</span></label>
     <label><input type="radio" name="merge-preset" value="print300" checked>
       <span>Print 300 dpi</span></label>
-    <label><input type="radio" name="merge-preset" value="print200">
-      <span>Print 200 dpi</span></label>
-    <label><input type="radio" name="merge-preset" value="screen150">
-      <span>Screen 150 dpi</span><small class="warn">Not for print</small></label>
     <label><input type="radio" name="merge-preset" value="lossless">
       <span>Lossless</span></label>
   </fieldset>

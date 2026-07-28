@@ -77,6 +77,20 @@ def scan_pdf_150dpi(tmp_path):
 
 
 @pytest.fixture
+def scan_pdf_1200dpi(tmp_path):
+    """A 2x3 inch grayscale page at 1200 dpi.
+
+    The preset ladder can only be measured on a source above every target:
+    Ghostscript leaves an image alone unless it exceeds the target by its
+    1.5 DownsampleThreshold, so a 600 dpi source gives ``print600`` nothing to
+    do and the ladder collapses. Kept small in inches to stay under 9
+    megapixels despite the resolution.
+    """
+    image = _render_text_page(2 * 1200, 3 * 1200, mode="L")
+    return _save_image_pdf(image, tmp_path / "scan1200.pdf", 1200)
+
+
+@pytest.fixture
 def mixed_resolution_scan_pdf(tmp_path):
     """A two-page scan whose pages were captured at different resolutions.
 

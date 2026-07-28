@@ -51,9 +51,12 @@ def test_presets_endpoint_lists_the_ladder_and_the_default(client):
     payload = client.get("/api/presets").get_json()
     assert payload["default"] == "print300"
     ids = [preset["id"] for preset in payload["presets"]]
-    assert ids == ["print300", "print200", "screen150", "lossless"]
+    assert ids == ["print600", "print300", "lossless"]
     by_id = {preset["id"]: preset for preset in payload["presets"]}
-    assert by_id["screen150"]["print_safe"] is False
+    # Every remaining level targets 300 dpi or better, so all are print-safe.
+    assert all(preset["print_safe"] for preset in payload["presets"])
+    assert by_id["print600"]["label"] == "Print 600 dpi"
+    assert payload["print_floor_dpi"] == 200
 
 
 def test_compress_returns_sizes_and_a_download_url(client, scan_pdf_600dpi):
@@ -76,10 +79,12 @@ def test_compress_returns_sizes_and_a_download_url(client, scan_pdf_600dpi):
     assert downloaded.get_data()[:5] == b"%PDF-"
 
 
-def test_compress_below_the_print_floor_reports_the_warning(client, scan_pdf_600dpi):
+def test_compress_below_the_print_floor_reports_the_warning(client, scan_pdf_150dpi):
+    """No preset can push a page below the floor any more, so the case that
+    still matters is a source that arrived below it."""
     payload = client.post(
         "/api/compress",
-        data={"files": [upload(scan_pdf_600dpi, "scan.pdf")], "preset": "screen150"},
+        data={"files": [upload(scan_pdf_150dpi, "scan.pdf")], "preset": "print300"},
         content_type="multipart/form-data",
     ).get_json()
     result = payload["results"][0]
@@ -204,7 +209,7 @@ def test_a_pdf_uploaded_as_an_image_is_rejected(client, vector_pdf_2pages):
 def test_preview_returns_two_image_urls_that_resolve(client, scan_pdf_600dpi):
     payload = client.post(
         "/api/compress",
-        data={"files": [upload(scan_pdf_600dpi, "scan.pdf")], "preset": "screen150"},
+        data={"files": [upload(scan_pdf_600dpi, "scan.pdf")], "preset": "print300"},
         content_type="multipart/form-data",
     ).get_json()
     preview_url = payload["results"][0]["preview_url"]
@@ -221,7 +226,7 @@ def test_zip_download_contains_every_successful_output(client, scan_pdf_600dpi):
         "/api/compress",
         data={
             "files": [upload(scan_pdf_600dpi, "one.pdf"), upload(scan_pdf_600dpi, "two.pdf")],
-            "preset": "print200",
+            "preset": "print600",
         },
         content_type="multipart/form-data",
     ).get_json()
@@ -315,7 +320,7 @@ def test_merge_with_compress_advertises_a_preview_url_that_actually_resolves(
         data={
             "files": [upload(scan_pdf_600dpi, "one.pdf"), upload(scan_pdf_600dpi, "two.pdf")],
             "compress": "1",
-            "preset": "screen150",
+            "preset": "print300",
         },
         content_type="multipart/form-data",
     ).get_json()
@@ -482,8 +487,13 @@ def test_index_wires_up_the_assets_and_the_print_warning_copy(client):
     body = client.get("/").get_data(as_text=True)
     assert "/static/app.js" in body
     assert "/static/style.css" in body
-    # The screen preset must be visibly marked as unsuitable for printing.
-    assert "not for print" in body.lower()
+    # All three levels must be offered by id, and the default pre-selected.
+    for preset_id in ("print600", "print300", "lossless"):
+        assert 'value="{0}"'.format(preset_id) in body
+    assert 'value="print300" checked' in body
+    # No level is unsuitable for print now, so that copy must be gone rather
+    # than left behind next to a preset that no longer exists.
+    assert "not for print" not in body.lower()
 
 
 def test_static_assets_are_served(client):
