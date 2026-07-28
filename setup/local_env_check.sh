@@ -40,15 +40,17 @@ run_check "Checking python $PYTHON_VERSION installation..." \
           "Python $PYTHON_VERSION is not installed through uv. Run 'uv python install $PYTHON_VERSION'."
 
 # Ghostscript does the compression; without it the app refuses to start.
+# Windows names the console executable gswin64c (gswin32c on a 32-bit install)
+# and ships no `gs` at all, so all three names are accepted here.
 run_check "Checking Ghostscript installation..." \
-          "which gs" \
-          "Ghostscript is not installed. Run 'brew install ghostscript'."
+          "which gs || which gswin64c || which gswin32c" \
+          "Ghostscript is not installed. Run 'brew install ghostscript' (macOS) or 'choco install ghostscript' (Windows)."
 
 # poppler supplies pdfimages/pdftoppm/pdftotext/pdfinfo: resolution measurement and previews.
 for binary in pdfimages pdftoppm pdftotext pdfinfo; do
   run_check "Checking poppler ($binary)..." \
             "which $binary" \
-            "poppler is not installed ($binary missing). Run 'brew install poppler'."
+            "poppler is not installed ($binary missing). Run 'brew install poppler' (macOS) or 'choco install poppler' (Windows)."
 done
 
 # Print the summary of commands the user needs to run (if any)

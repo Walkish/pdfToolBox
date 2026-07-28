@@ -12,10 +12,23 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
 
+# Checked in order; the first that opens wins. Covering Windows and Linux as
+# well as macOS is not cosmetic: without a real TrueType font Pillow falls back
+# to its small bitmap default, and the compression fixtures would then carry
+# far less detail than a scanned page does -- which is exactly what makes the
+# calibration assertions meaningful.
 FONT_CANDIDATES = [
+    # macOS
     "/System/Library/Fonts/Supplemental/Arial.ttf",
     "/System/Library/Fonts/Helvetica.ttc",
     "/Library/Fonts/Arial.ttf",
+    # Windows
+    r"C:\Windows\Fonts\arial.ttf",
+    r"C:\Windows\Fonts\segoeui.ttf",
+    r"C:\Windows\Fonts\calibri.ttf",
+    # Linux
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ]
 
 

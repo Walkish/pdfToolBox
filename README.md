@@ -5,6 +5,9 @@ unprintable, merging PDFs, and turning images into a PDF.
 
 ## Requirements
 
+The instructions below are for macOS, where this was built and tested. For
+Windows see [Running on Windows](#running-on-windows).
+
 - macOS with Homebrew
 - [uv](https://docs.astral.sh/uv/) — `make setup` installs the pinned version if
   you do not have it, and manages the Python toolchain itself
@@ -49,6 +52,122 @@ PDFTOOLBOX_PORT=5058 make dev
 already-occupied port stops the server with a message telling you which port
 failed and how to override it. The server always binds `127.0.0.1` only, on
 any port.
+
+## Running on Windows
+
+> **Not verified on Windows.** This was built and tested on macOS. The code
+> handles Windows' differences deliberately — see the notes at the end of this
+> section — but nobody has run it on a Windows machine, so treat the commands
+> below as untested. If something here is wrong, the most likely culprits are
+> the poppler package name and PATH.
+
+Windows has no `make` and no Homebrew, so the steps below drive `uv` directly.
+All commands are PowerShell, run from the repository root.
+
+### 1. Install uv
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.11.8/install.ps1 | iex"
+```
+
+The version is pinned to match `[tool.uv] required-version` in
+`pyproject.toml`. `winget install --id=astral-sh.uv` also works if you would
+rather not pipe a script, but it installs whatever version is current.
+
+### 2. Install Ghostscript and poppler
+
+These are ordinary Windows programs, not Python packages, so uv cannot install
+them. With [Scoop](https://scoop.sh/):
+
+```powershell
+scoop install ghostscript poppler
+```
+
+With [Chocolatey](https://chocolatey.org/):
+
+```powershell
+choco install ghostscript
+choco install poppler
+```
+
+If neither package manager has a usable poppler build, download one from
+[poppler-windows releases](https://github.com/oschwartz10612/poppler-windows/releases),
+unzip it, and add its `Library\bin` folder to `PATH`.
+
+**Both must be on `PATH`.** Check it before going further:
+
+```powershell
+gswin64c --version
+pdfimages -h
+```
+
+If `gswin64c` is not found, add Ghostscript's `bin` folder (typically
+`C:\Program Files\gs\gs10.07.1\bin`) to `PATH`. Package-manager installs
+normally do this for you; the standalone installer sometimes does not.
+
+### 3. Install Python dependencies
+
+```powershell
+uv sync
+```
+
+This creates `.venv` with the Python pinned in `pyproject.toml`, downloading
+that version if you do not have it.
+
+### 4. Run the server
+
+```powershell
+uv run python app.py
+```
+
+Then open http://127.0.0.1:5057. To use a different port:
+
+```powershell
+$env:PDFTOOLBOX_PORT = "5058"; uv run python app.py
+```
+
+### 5. Tests and lint
+
+Tests need the repository root on `PYTHONPATH`, because `uv run pytest` invokes
+a console script and Python only adds the working directory automatically for
+`python -m`. Running the server does not need this — Python adds `app.py`'s own
+directory for you.
+
+```powershell
+$env:PYTHONPATH = "$PWD"; uv run pytest tests/ -v
+```
+
+```powershell
+uv run ruff check .
+uv run ruff format .
+uv run ty check
+```
+
+### Using the Makefile on Windows
+
+`make setup`, `make dev`, `make lint` and `make test` all work under Git Bash
+or WSL if you have GNU Make installed (`scoop install make`), since
+`setup/local_env_check.sh` is a bash script. In plain PowerShell or `cmd`,
+use the `uv` commands above instead.
+
+### What the code does differently on Windows
+
+- **Ghostscript is called `gswin64c.exe`**, not `gs`, and a 32-bit install
+  provides `gswin32c.exe`. `pdftools/binaries.py` tries all three names, so no
+  configuration is needed — but a lookup for `gs` alone would have made the app
+  refuse to start on an otherwise correct machine.
+- **Install hints are chosen per platform**, so a missing binary suggests
+  `choco`/`scoop` rather than `brew`.
+- **poppler keeps its executable names** everywhere; Windows resolves the
+  `.exe` through `PATHEXT`.
+- **Paths containing spaces are safe.** Every external tool is invoked with an
+  argument list and never through a shell, so `C:\Program Files\...` needs no
+  quoting or escaping.
+- **Test fixtures look for Windows fonts** (`C:\Windows\Fonts\arial.ttf` and
+  friends). Without a real TrueType font Pillow falls back to a small bitmap
+  face, and the compression fixtures would carry far less detail than a real
+  scan — which is what makes the calibration assertions meaningful in the
+  first place.
 
 ## Compression levels
 
