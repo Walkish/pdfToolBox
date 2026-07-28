@@ -3,6 +3,18 @@
 A localhost web tool for three PDF chores: compressing PDFs without making them
 unprintable, merging PDFs, and turning images into a PDF.
 
+## Contents
+
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Run](#run)
+- [Running on Windows](#running-on-windows)
+- [Compression levels](#compression-levels)
+- [Known limitations](#known-limitations)
+- [Tests](#tests)
+- [Lint and type checks](#lint-and-type-checks)
+- [Security](#security)
+
 ## Requirements
 
 The instructions below are for macOS, where this was built and tested. For
