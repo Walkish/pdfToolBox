@@ -57,6 +57,15 @@ h1 { margin: 0; font-size: 22px; }
 }
 .icon:disabled { opacity: .35; cursor: default; }
 
+.thumb {
+  width: 56px; height: 56px; object-fit: contain; flex: none;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
+  transition: transform .15s ease;
+}
+/* Hidden rather than removed, so a row whose preview failed keeps the same
+   layout as its neighbours instead of jumping left. */
+.thumb.is-empty { visibility: hidden; }
+
 .presets { border: 1px solid var(--line); border-radius: 10px; background: var(--card);
            padding: 12px 16px; margin: 16px 0; }
 .presets legend { padding: 0 6px; font-size: 13px; color: var(--muted); }

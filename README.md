@@ -4,7 +4,14 @@ A localhost web tool for three PDF chores: compressing PDFs without making them
 unprintable, merging PDFs, and turning images into a PDF.
 
 Images can be PNG, JPEG, WebP or HEIC — the format an iPhone shoots by default.
-One image becomes one page, sized from the image itself.
+One image becomes one page, sized from the image itself. Each row shows a
+thumbnail with two rotate buttons, so a photo that came out sideways can be
+turned a quarter at a time before the PDF is built.
+
+Thumbnails are rendered by the server rather than by the browser, because no
+browser except Safari can display HEIC. Rotation is sent as an angle and applied
+server-side when the page is written, so nothing is re-encoded in the browser
+first.
 
 ## Contents
 
@@ -255,6 +262,10 @@ scale, forms — and you get the plain page-for-page merge.
   3.9 wheels. It cannot be updated until this project's Python moves off 3.9.
 - A burst or Live Photo contributes its primary image only, so one HEIC file is
   always one page.
+- Rotations are lost if the page is reloaded before the PDF is built, as is the
+  file list itself.
+- The thumbnail is a preview, not a proof: it is rendered small, so it shows
+  orientation and framing rather than fine detail.
 
 ## Tests
 
