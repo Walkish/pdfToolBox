@@ -8,10 +8,14 @@ One image becomes one page, sized from the image itself. Each row shows a
 thumbnail with two rotate buttons, so a photo that came out sideways can be
 turned a quarter at a time before the PDF is built.
 
+The merge tab shows thumbnails too — the first page of each PDF — because one
+scan's filename looks much like another's. It has no rotate buttons: merging
+does not re-render pages.
+
 Thumbnails are rendered by the server rather than by the browser, because no
-browser except Safari can display HEIC. Rotation is sent as an angle and applied
-server-side when the page is written, so nothing is re-encoded in the browser
-first.
+browser except Safari can display HEIC, and a PDF cannot be shown in an `<img>`
+at all. Rotation is sent as an angle and applied server-side when the page is
+written, so nothing is re-encoded in the browser first.
 
 ## Contents
 

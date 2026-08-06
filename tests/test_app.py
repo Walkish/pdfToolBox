@@ -626,3 +626,23 @@ def test_rotations_stay_with_their_images_when_one_upload_fails(client, jpeg_300
         third_ratio = third.width / float(third.height)
     # The surviving second page is the third upload, which asked for 90.
     assert sizes[1][0] / sizes[1][1] == pytest.approx(1 / third_ratio, abs=0.05)
+
+
+def test_thumbnail_renders_a_pdf(client, vector_pdf_2pages):
+    response = client.post(
+        "/api/thumbnail",
+        data={"file": upload(vector_pdf_2pages, "doc.pdf")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.get_data()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_thumbnail_rejects_a_png_renamed_to_pdf(client, png_rgba):
+    response = client.post(
+        "/api/thumbnail",
+        data={"file": upload(png_rgba, "disguised.pdf")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400

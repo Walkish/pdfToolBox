@@ -98,9 +98,10 @@ def prepare_image(path, rotation: int = 0) -> Tuple[Image.Image, float]:
         raise ToolError("Could not read image {0}: {1}".format(path.name, exc)) from exc
 
 
-# Big enough to stay sharp on a retina screen at the ~56 px the row shows it
-# at, small enough that a preview costs nothing to produce or transfer.
-THUMBNAIL_MAX_EDGE = 160
+# The row shows this at 120 px, so 320 keeps it sharp on a retina screen with
+# room to spare, and still costs nothing to produce or transfer over loopback.
+# Kept in step with preview.THUMBNAIL_MAX_EDGE so image and PDF rows match.
+THUMBNAIL_MAX_EDGE = 320
 
 
 def thumbnail_png(path, max_edge: int = THUMBNAIL_MAX_EDGE) -> bytes:

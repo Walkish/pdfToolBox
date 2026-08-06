@@ -369,20 +369,30 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
 
     @application.route("/api/thumbnail", methods=["POST"])
     def api_thumbnail():
-        """A preview image for one upload. Stateless: nothing is stored."""
+        """A preview image for one upload, image or PDF. Stateless.
+
+        Dispatches on the declared extension the same way the upload routes
+        do, so the merge tab gets first-page previews of its PDFs from the
+        same endpoint the images tab uses.
+        """
         storage = request.files.get("file")
         if storage is None:
             abort(400, description="No file was uploaded")
         display_name = storage.filename or "upload"
+        is_pdf = Path(display_name).suffix.lower() in validate.PDF_EXTENSIONS
         # Validated exactly like a real upload. Without this the endpoint is a
-        # second door into the image decoder that skips the size and
-        # pixel-count limits, which is a hole rather than a convenience.
+        # second door into the decoders that skips the size and pixel-count
+        # limits, which is a hole rather than a convenience.
         with tempfile.TemporaryDirectory(prefix="thumbnail-") as directory:
             target = Path(directory) / "upload"
             storage.save(str(target))
             try:
-                validate.validate_image_file(target, display_name)
-                data = images.thumbnail_png(target)
+                if is_pdf:
+                    validate.validate_pdf_file(target, display_name)
+                    data = preview.pdf_thumbnail_png(target)
+                else:
+                    validate.validate_image_file(target, display_name)
+                    data = images.thumbnail_png(target)
             except validate.ValidationError as exc:
                 abort(400, description=str(exc))
             except ToolError as exc:

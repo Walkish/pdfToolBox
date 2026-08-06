@@ -17,6 +17,11 @@ var TABS = {
 var ROTATIONS = new Map();
 var THUMBNAILS = new Map();
 
+/* The images and merge tabs both list files whose names do not say much: one
+   scan looks like another. Compress is left out on purpose -- it neither
+   reorders nor rotates, so its rows have nothing to decide about. */
+function hasThumbnails(tabName) { return tabName === "images" || tabName === "merge"; }
+
 function byId(id) { return document.getElementById(id); }
 
 function humanSize(bytes) {
@@ -43,7 +48,7 @@ function renderFileList(tabName) {
   list.innerHTML = "";
   state.files.forEach(function (file, index) {
     var item = document.createElement("li");
-    if (tabName === "images") {
+    if (hasThumbnails(tabName)) {
       item.appendChild(thumbnailImage(file));
     }
     var name = document.createElement("span");
@@ -130,7 +135,7 @@ function addFiles(tabName, fileList) {
   var i;
   for (i = 0; i < fileList.length; i += 1) {
     TABS[tabName].files.push(fileList[i]);
-    if (tabName === "images") {
+    if (hasThumbnails(tabName)) {
       loadThumbnail(tabName, fileList[i]);
     }
   }

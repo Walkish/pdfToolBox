@@ -58,7 +58,7 @@ h1 { margin: 0; font-size: 22px; }
 .icon:disabled { opacity: .35; cursor: default; }
 
 .thumb {
-  width: 56px; height: 56px; object-fit: contain; flex: none;
+  width: 120px; height: 120px; object-fit: contain; flex: none;
   border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
   transition: transform .15s ease;
 }
