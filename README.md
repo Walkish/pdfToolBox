@@ -3,6 +3,9 @@
 A localhost web tool for three PDF chores: compressing PDFs without making them
 unprintable, merging PDFs, and turning images into a PDF.
 
+Images can be PNG, JPEG, WebP or HEIC — the format an iPhone shoots by default.
+One image becomes one page, sized from the image itself.
+
 ## Contents
 
 - [Requirements](#requirements)
@@ -248,6 +251,10 @@ scale, forms — and you get the plain page-for-page merge.
 - PDF/A conformance and accessibility tags may be dropped.
 - Interactive form fields may lose behaviour, though field values are kept.
 - Merging does not deduplicate resources shared between input files.
+- HEIF decoding is pinned to `pillow-heif==1.1.1`, the last release with Python
+  3.9 wheels. It cannot be updated until this project's Python moves off 3.9.
+- A burst or Live Photo contributes its primary image only, so one HEIC file is
+  always one page.
 
 ## Tests
 

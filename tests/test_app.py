@@ -512,3 +512,14 @@ def test_merge_leaves_page_sizes_alone_without_the_field(client, vector_pdf_fact
         content_type="multipart/form-data",
     ).get_json()
     assert merged_page_sizes(client, payload) == [(595.0, 842.0), (595.0, 842.0), (1200.0, 1600.0)]
+
+
+def test_images_endpoint_accepts_a_heic(client, heic_image):
+    payload = client.post(
+        "/api/images",
+        data={"files": [upload(heic_image, "photo.heic")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    result = payload["results"][0]
+    assert result["ok"] is True
+    assert client.get(result["download_url"]).get_data()[:5] == b"%PDF-"
