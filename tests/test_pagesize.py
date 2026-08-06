@@ -2,7 +2,7 @@
 
 import pytest
 from pypdf import PdfWriter
-from pypdf.generic import ArrayObject, FloatObject, NameObject
+from pypdf.generic import ArrayObject, FloatObject, NameObject, RectangleObject
 
 from pdftools import pagesize
 
@@ -63,3 +63,44 @@ def test_measuring_does_not_add_a_cropbox_to_the_page():
 def test_an_empty_batch_is_rejected():
     with pytest.raises(ValueError):
         pagesize.dominant_size([])
+
+
+def test_a_page_already_at_the_target_is_left_alone():
+    # Fitting writes every box, so an absent /CropBox is what tells "returned
+    # early" from "ran and happened to produce the same size". Do not assert on
+    # /Contents instead: measured, add_transformation does not create one on a
+    # page that has none, so that assertion would pass either way.
+    batch = pages((612, 792))
+    pagesize.fit_page(batch[0], (612.0, 792.0))
+    assert "/CropBox" not in batch[0]
+
+
+def test_a_page_at_the_target_by_rotation_alone_is_left_alone():
+    batch = pages((792, 612))
+    batch[0].rotate(90)
+    pagesize.fit_page(batch[0], (612.0, 792.0))
+    # Still displayed at the target, and its /Rotate was neither disturbed nor
+    # baked into the content by transfer_rotation_to_content.
+    assert batch[0].rotation % 360 == 90
+    assert pagesize.visible_size(batch[0]) == (612.0, 792.0)
+    assert "/CropBox" not in batch[0]
+
+
+def test_a_fitted_page_reports_the_target_size():
+    batch = pages((300, 400))
+    pagesize.fit_page(batch[0], (612.0, 792.0))
+    assert pagesize.visible_size(batch[0]) == (612.0, 792.0)
+
+
+def test_every_box_on_a_fitted_page_is_the_target():
+    batch = pages((300, 400))
+    pagesize.fit_page(batch[0], (612.0, 792.0))
+    for name in ("/MediaBox", "/CropBox", "/TrimBox", "/BleedBox", "/ArtBox"):
+        box = RectangleObject(batch[0][name].get_object())
+        assert (float(box.width), float(box.height)) == (612.0, 792.0)
+
+
+def test_a_landscape_page_meeting_a_portrait_target_is_rotated_upright():
+    batch = pages((792, 612))
+    pagesize.fit_page(batch[0], (612.0, 792.0))
+    assert pagesize.visible_size(batch[0]) == (612.0, 792.0)
