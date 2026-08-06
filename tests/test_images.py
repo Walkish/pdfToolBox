@@ -150,3 +150,54 @@ def test_a_heic_falls_back_to_the_default_dpi(heic_image, tmp_path):
     output = images.images_to_pdf([heic_image], tmp_path / "out.pdf")
     width_pt, _ = page_boxes(output)[0]
     assert width_pt == pytest.approx(400 / float(images.DEFAULT_IMAGE_DPI) * 72, abs=1)
+
+
+def test_rotating_by_90_swaps_the_page_sides(jpeg_300dpi, tmp_path):
+    upright = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "a.pdf"))[0]
+    turned = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "b.pdf", rotations=[90]))[0]
+    assert (turned[0], turned[1]) == pytest.approx((upright[1], upright[0]), abs=0.5)
+
+
+def test_rotating_by_180_keeps_the_page_shape(jpeg_300dpi, tmp_path):
+    upright = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "a.pdf"))[0]
+    turned = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "b.pdf", rotations=[180]))[0]
+    assert turned == pytest.approx(upright, abs=0.5)
+
+
+def test_rotation_is_applied_on_top_of_the_exif_correction(heic_rotated):
+    # The fixture is 400x200 landscape with EXIF Orientation=6, so it arrives
+    # as 200x400 portrait. A further 90 must give landscape again -- if the
+    # rotation were applied before the EXIF correction, or instead of it, this
+    # would come out portrait.
+    image, _ = images.prepare_image(heic_rotated, rotation=90)
+    try:
+        assert image.size == (400, 200)
+    finally:
+        image.close()
+
+
+def test_a_clockwise_rotation_turns_clockwise(tmp_path):
+    # A marked corner, so the direction is pinned and not merely the shape.
+    # Clockwise sends the top-left pixel to the top-right.
+    source = tmp_path / "marked.png"
+    marked = Image.new("RGB", (100, 40), (255, 255, 255))
+    marked.putpixel((0, 0), (255, 0, 0))
+    marked.save(str(source))
+    image, _ = images.prepare_image(source, rotation=90)
+    try:
+        assert image.size == (40, 100)
+        # PNG is lossless and a quarter turn moves whole pixels, so the mark
+        # arrives exactly, not approximately.
+        assert image.getpixel((image.width - 1, 0)) == (255, 0, 0)
+    finally:
+        image.close()
+
+
+def test_a_rotation_list_of_the_wrong_length_is_rejected(jpeg_300dpi, tmp_path):
+    with pytest.raises(ValueError):
+        images.images_to_pdf([jpeg_300dpi], tmp_path / "out.pdf", rotations=[90, 180])
+
+
+def test_an_illegal_rotation_is_rejected(jpeg_300dpi, tmp_path):
+    with pytest.raises(ValueError):
+        images.images_to_pdf([jpeg_300dpi], tmp_path / "out.pdf", rotations=[45])
