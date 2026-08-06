@@ -322,9 +322,9 @@ def vector_pdf_2pages(tmp_path):
 def vector_pdf_factory(tmp_path):
     counter = {"n": 0}
 
-    def build(markers):
+    def build(markers, page_size=(612, 792)):
         counter["n"] += 1
-        return _vector_pdf(tmp_path / "vector_{0}.pdf".format(counter["n"]), markers)
+        return _vector_pdf(tmp_path / "vector_{0}.pdf".format(counter["n"]), markers, page_size=page_size)
 
     return build
 
