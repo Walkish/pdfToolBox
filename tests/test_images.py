@@ -1,5 +1,6 @@
 """Tests for image-to-PDF conversion."""
 
+import io
 import subprocess
 
 import pytest
@@ -201,3 +202,28 @@ def test_a_rotation_list_of_the_wrong_length_is_rejected(jpeg_300dpi, tmp_path):
 def test_an_illegal_rotation_is_rejected(jpeg_300dpi, tmp_path):
     with pytest.raises(ValueError):
         images.images_to_pdf([jpeg_300dpi], tmp_path / "out.pdf", rotations=[45])
+
+
+def test_a_thumbnail_fits_the_box_and_keeps_its_aspect_ratio(jpeg_300dpi):
+    with Image.open(str(jpeg_300dpi)) as source:
+        expected = source.width / float(source.height)
+    with Image.open(io.BytesIO(images.thumbnail_png(jpeg_300dpi))) as thumb:
+        assert max(thumb.size) <= images.THUMBNAIL_MAX_EDGE
+        assert abs(thumb.width / float(thumb.height) - expected) < 0.05
+        assert thumb.format == "PNG"
+
+
+def test_a_cmyk_source_yields_an_rgb_thumbnail(tmp_path):
+    # prepare_image keeps CMYK as CMYK for the PDF path, and PNG cannot hold
+    # it, so the thumbnail path has to convert or fail to save at all.
+    source = tmp_path / "cmyk.jpg"
+    Image.new("CMYK", (300, 200), (0, 40, 90, 5)).save(str(source), "JPEG")
+    with Image.open(io.BytesIO(images.thumbnail_png(source))) as thumb:
+        assert thumb.mode in ("RGB", "RGBA", "P", "L")
+
+
+def test_a_heic_yields_a_thumbnail(heic_image):
+    # The case the whole server-side approach exists for: no browser but
+    # Safari can render this one itself.
+    with Image.open(io.BytesIO(images.thumbnail_png(heic_image))) as thumb:
+        assert max(thumb.size) <= images.THUMBNAIL_MAX_EDGE

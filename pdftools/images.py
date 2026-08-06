@@ -6,6 +6,7 @@ it has any, and falls back to 300 dpi otherwise, which keeps pages a sane size
 for printing instead of the 55-inch monsters a 72 dpi assumption produces.
 """
 
+import io
 import shutil
 import tempfile
 from pathlib import Path
@@ -95,6 +96,35 @@ def prepare_image(path, rotation: int = 0) -> Tuple[Image.Image, float]:
         Image.DecompressionBombError,
     ) as exc:
         raise ToolError("Could not read image {0}: {1}".format(path.name, exc)) from exc
+
+
+# Big enough to stay sharp on a retina screen at the ~56 px the row shows it
+# at, small enough that a preview costs nothing to produce or transfer.
+THUMBNAIL_MAX_EDGE = 160
+
+
+def thumbnail_png(path, max_edge: int = THUMBNAIL_MAX_EDGE) -> bytes:
+    """PNG bytes of a small preview of ``path``.
+
+    Rendered through prepare_image, so the EXIF orientation is already resolved
+    and the preview shows what the page will show. The user's own rotation is
+    not applied here: the browser turns the thumbnail with CSS, which is
+    instant and costs no round trip.
+    """
+    image, _dpi = prepare_image(path)
+    try:
+        if image.mode != "RGB":
+            # prepare_image hands CMYK back as CMYK for the PDF path, and PNG
+            # cannot hold CMYK at all.
+            converted = image.convert("RGB")
+            image.close()
+            image = converted
+        image.thumbnail((max_edge, max_edge))
+        buffer = io.BytesIO()
+        image.save(buffer, "PNG")
+        return buffer.getvalue()
+    finally:
+        image.close()
 
 
 def images_to_pdf(
