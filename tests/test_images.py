@@ -124,3 +124,29 @@ def test_a_non_image_file_raises_a_tool_error(tmp_path):
     bogus.write_bytes(b"definitely not an image")
     with pytest.raises(compress.ToolError):
         images.images_to_pdf([bogus], tmp_path / "out.pdf")
+
+
+def test_a_heic_becomes_one_page(heic_image, tmp_path):
+    output = images.images_to_pdf([heic_image], tmp_path / "out.pdf")
+    assert len(page_boxes(output)) == 1
+
+
+def test_a_sideways_heic_is_not_rotated_twice(heic_rotated, tmp_path):
+    # The source is 400x200 landscape with EXIF Orientation=6, so it is meant
+    # to be displayed as 200x400 portrait. pillow-heif applies that on open;
+    # if exif_transpose applied it a second time the page would come out
+    # landscape again, which is the failure this guards.
+    with Image.open(str(heic_rotated)) as opened:
+        assert opened.size == (200, 400)
+    width_pt, height_pt = page_boxes(images.images_to_pdf([heic_rotated], tmp_path / "out.pdf"))[0]
+    assert height_pt > width_pt
+    assert abs(width_pt / height_pt - 200 / 400.0) < 0.02
+
+
+def test_a_heic_falls_back_to_the_default_dpi(heic_image, tmp_path):
+    # HEIC carries no resolution metadata, so the page must come out at
+    # DEFAULT_IMAGE_DPI rather than at a 72 dpi assumption, which would give a
+    # 400x300 photo a page over five inches wide.
+    output = images.images_to_pdf([heic_image], tmp_path / "out.pdf")
+    width_pt, _ = page_boxes(output)[0]
+    assert width_pt == pytest.approx(400 / float(images.DEFAULT_IMAGE_DPI) * 72, abs=1)
