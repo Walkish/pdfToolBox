@@ -4,9 +4,10 @@ import io
 import zipfile
 
 import pytest
+from pypdf import PdfReader
 
 import app as app_module
-from pdftools import jobs
+from pdftools import jobs, pagesize
 
 
 @pytest.fixture
@@ -480,3 +481,34 @@ def test_index_wires_up_the_assets_and_the_print_warning_copy(client):
 def test_static_assets_are_served(client):
     for path in ("/static/app.js", "/static/style.css"):
         assert client.get(path).status_code == 200
+
+
+def merged_page_sizes(client, payload):
+    downloaded = client.get(payload["results"][0]["download_url"]).get_data()
+    return [pagesize.visible_size(page) for page in PdfReader(io.BytesIO(downloaded)).pages]
+
+
+def test_merge_normalizes_page_sizes_when_asked(client, vector_pdf_factory):
+    # The A4 input carries two pages and the photo one, so A4 wins the count
+    # outright. With one page each the batch would tie, and a tie goes to the
+    # larger area -- correct behaviour, but the opposite of the point here.
+    a4 = vector_pdf_factory(["ALPHA", "GAMMA"], page_size=(595, 842))
+    photo = vector_pdf_factory(["BETA"], page_size=(1200, 1600))
+    payload = client.post(
+        "/api/merge",
+        data={"files": [upload(a4, "a4.pdf"), upload(photo, "photo.pdf")], "normalize": "1"},
+        content_type="multipart/form-data",
+    ).get_json()
+    assert payload["results"][0]["ok"] is True
+    assert merged_page_sizes(client, payload) == [(595.0, 842.0)] * 3
+
+
+def test_merge_leaves_page_sizes_alone_without_the_field(client, vector_pdf_factory):
+    a4 = vector_pdf_factory(["ALPHA", "GAMMA"], page_size=(595, 842))
+    photo = vector_pdf_factory(["BETA"], page_size=(1200, 1600))
+    payload = client.post(
+        "/api/merge",
+        data={"files": [upload(a4, "a4.pdf"), upload(photo, "photo.pdf")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    assert merged_page_sizes(client, payload) == [(595.0, 842.0), (595.0, 842.0), (1200.0, 1600.0)]

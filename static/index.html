@@ -41,8 +41,9 @@
     <input type="file" id="merge-input" accept="application/pdf" multiple hidden>
     <p>Drop PDFs here or <button class="link" data-pick="merge-input">choose files</button></p>
   </div>
-  <p class="hint">Pages are merged top to bottom. Reorder with the arrows.</p>
+  <p class="hint">Pages are merged top to bottom. Reorder with the arrows. Pages of differing sizes are fitted to the most common size in the batch.</p>
   <ul class="filelist" id="merge-list"></ul>
+  <label class="check"><input type="checkbox" id="merge-normalize" checked> Match page sizes</label>
   <label class="check"><input type="checkbox" id="merge-compress"> Compress the result</label>
   <fieldset class="presets" id="merge-presets" hidden>
     <legend>Compression level</legend>

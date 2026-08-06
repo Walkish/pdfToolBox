@@ -306,7 +306,11 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         output_name = validate.normalize_output_name(request.form.get("output_name", ""), "merged.pdf")
         merged = job.outputs / output_name
         try:
-            merge.merge_pdfs([record["path"] for record in usable], merged)
+            merge.merge_pdfs(
+                [record["path"] for record in usable],
+                merged,
+                normalize_pages=request.form.get("normalize") == "1",
+            )
         except (ToolError, ValueError, OSError) as exc:
             message = _redact(str(exc), *[(record["path"], record["name"]) for record in usable])
             results.append(_failure(output_name, message, getattr(exc, "stderr", "")))

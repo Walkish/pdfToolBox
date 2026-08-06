@@ -231,6 +231,9 @@ function run(tabName) {
   if (tabName === "compress") {
     form.append("preset", selectedPreset("compress"));
   }
+  if (tabName === "merge" && byId("merge-normalize").checked) {
+    form.append("normalize", "1");
+  }
   if (tabName === "merge" && byId("merge-compress").checked) {
     form.append("compress", "1");
     form.append("preset", selectedPreset("merge"));
