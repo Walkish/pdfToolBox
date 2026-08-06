@@ -12,6 +12,12 @@ dependencies = [
     "flask",
     "pypdf",
     "pillow",
+    # HEIF/HEIC decoding: Pillow cannot do it alone. Pinned exactly, and the pin
+    # cannot be raised while this project stays on Python 3.9 -- pillow-heif
+    # dropped 3.9 at 1.2.0, so 1.1.1 is the last release with cp39 wheels (macOS
+    # arm64 included). It requires pillow>=11.1.0, which the 11.3.0 already
+    # locked here satisfies, so it does not drag Pillow along with it.
+    "pillow-heif==1.1.1",
     # Imported directly (secure_filename, HTTPException), not just via flask.
     "werkzeug",
 ]

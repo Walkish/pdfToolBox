@@ -37,7 +37,15 @@ NAME_MAX_BYTES = 255
 _POSITION_PREFIX_BYTES = 4
 
 PDF_EXTENSIONS = {".pdf"}
-IMAGE_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
+IMAGE_EXTENSIONS = {
+    ".png": "PNG",
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".webp": "WEBP",
+    # Both report format "HEIF"; .heic is what phones actually write.
+    ".heic": "HEIF",
+    ".heif": "HEIF",
+}
 
 _PDF_MAGIC = b"%PDF-"
 # Some real-world PDFs carry a little junk before the header; the spec allows

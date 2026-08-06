@@ -162,3 +162,27 @@ def test_clamping_never_splits_a_multibyte_utf8_character(monkeypatch):
     result.encode("utf-8").decode("utf-8")
     prefixed_bytes = len(b"003_") + len(result.encode("utf-8"))
     assert prefixed_bytes <= validate.NAME_MAX_BYTES
+
+
+def test_a_heic_file_is_accepted(heic_image):
+    validate.validate_image_file(heic_image, "photo.heic")
+
+
+def test_a_heif_extension_is_accepted(heic_image, tmp_path):
+    renamed = tmp_path / "photo.heif"
+    renamed.write_bytes(heic_image.read_bytes())
+    validate.validate_image_file(renamed, "photo.heif")
+
+
+def test_a_png_renamed_to_heic_is_rejected(png_rgba, tmp_path):
+    disguised = tmp_path / "disguised.heic"
+    disguised.write_bytes(png_rgba.read_bytes())
+    with pytest.raises(validate.ValidationError):
+        validate.validate_image_file(disguised, "disguised.heic")
+
+
+def test_a_garbage_heic_is_rejected(tmp_path):
+    broken = tmp_path / "broken.heic"
+    broken.write_bytes(b"not a heic at all")
+    with pytest.raises(validate.ValidationError):
+        validate.validate_image_file(broken, "broken.heic")

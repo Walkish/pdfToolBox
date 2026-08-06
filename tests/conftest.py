@@ -517,3 +517,30 @@ def jpeg_300dpi(tmp_path):
     path = tmp_path / "photo300.jpg"
     image.save(str(path), "JPEG", dpi=(300, 300), quality=92)
     return path
+
+
+@pytest.fixture
+def heic_image(tmp_path):
+    """A plain RGB HEIC, written with pillow-heif rather than checked in."""
+    path = tmp_path / "photo.heic"
+    _render_text_page(400, 300, mode="RGB").save(str(path), quality=90)
+    return path
+
+
+@pytest.fixture
+def heic_rotated(tmp_path):
+    """A landscape HEIC carrying EXIF Orientation=6, as a phone writes for a
+    sideways shot.
+
+    HEIF can hold rotation in the container and in EXIF at once, which is the
+    classic way to end up rotating a page twice. Measured with pillow-heif
+    1.1.1: it applies the rotation on open and resets the EXIF tag to 1, so
+    exif_transpose does nothing further -- this fixture exists to keep that
+    true.
+    """
+    path = tmp_path / "sideways.heic"
+    image = _render_text_page(400, 200, mode="RGB")
+    exif = image.getexif()
+    exif[274] = 6
+    image.save(str(path), exif=exif.tobytes(), quality=90)
+    return path
