@@ -1,5 +1,6 @@
 """Tests for image-to-PDF conversion."""
 
+import io
 import subprocess
 
 import pytest
@@ -124,3 +125,105 @@ def test_a_non_image_file_raises_a_tool_error(tmp_path):
     bogus.write_bytes(b"definitely not an image")
     with pytest.raises(compress.ToolError):
         images.images_to_pdf([bogus], tmp_path / "out.pdf")
+
+
+def test_a_heic_becomes_one_page(heic_image, tmp_path):
+    output = images.images_to_pdf([heic_image], tmp_path / "out.pdf")
+    assert len(page_boxes(output)) == 1
+
+
+def test_a_sideways_heic_is_not_rotated_twice(heic_rotated, tmp_path):
+    # The source is 400x200 landscape with EXIF Orientation=6, so it is meant
+    # to be displayed as 200x400 portrait. pillow-heif applies that on open;
+    # if exif_transpose applied it a second time the page would come out
+    # landscape again, which is the failure this guards.
+    with Image.open(str(heic_rotated)) as opened:
+        assert opened.size == (200, 400)
+    width_pt, height_pt = page_boxes(images.images_to_pdf([heic_rotated], tmp_path / "out.pdf"))[0]
+    assert height_pt > width_pt
+    assert abs(width_pt / height_pt - 200 / 400.0) < 0.02
+
+
+def test_a_heic_falls_back_to_the_default_dpi(heic_image, tmp_path):
+    # HEIC carries no resolution metadata, so the page must come out at
+    # DEFAULT_IMAGE_DPI rather than at a 72 dpi assumption, which would give a
+    # 400x300 photo a page over five inches wide.
+    output = images.images_to_pdf([heic_image], tmp_path / "out.pdf")
+    width_pt, _ = page_boxes(output)[0]
+    assert width_pt == pytest.approx(400 / float(images.DEFAULT_IMAGE_DPI) * 72, abs=1)
+
+
+def test_rotating_by_90_swaps_the_page_sides(jpeg_300dpi, tmp_path):
+    upright = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "a.pdf"))[0]
+    turned = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "b.pdf", rotations=[90]))[0]
+    assert (turned[0], turned[1]) == pytest.approx((upright[1], upright[0]), abs=0.5)
+
+
+def test_rotating_by_180_keeps_the_page_shape(jpeg_300dpi, tmp_path):
+    upright = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "a.pdf"))[0]
+    turned = page_boxes(images.images_to_pdf([jpeg_300dpi], tmp_path / "b.pdf", rotations=[180]))[0]
+    assert turned == pytest.approx(upright, abs=0.5)
+
+
+def test_rotation_is_applied_on_top_of_the_exif_correction(heic_rotated):
+    # The fixture is 400x200 landscape with EXIF Orientation=6, so it arrives
+    # as 200x400 portrait. A further 90 must give landscape again -- if the
+    # rotation were applied before the EXIF correction, or instead of it, this
+    # would come out portrait.
+    image, _ = images.prepare_image(heic_rotated, rotation=90)
+    try:
+        assert image.size == (400, 200)
+    finally:
+        image.close()
+
+
+def test_a_clockwise_rotation_turns_clockwise(tmp_path):
+    # A marked corner, so the direction is pinned and not merely the shape.
+    # Clockwise sends the top-left pixel to the top-right.
+    source = tmp_path / "marked.png"
+    marked = Image.new("RGB", (100, 40), (255, 255, 255))
+    marked.putpixel((0, 0), (255, 0, 0))
+    marked.save(str(source))
+    image, _ = images.prepare_image(source, rotation=90)
+    try:
+        assert image.size == (40, 100)
+        # PNG is lossless and a quarter turn moves whole pixels, so the mark
+        # arrives exactly, not approximately.
+        assert image.getpixel((image.width - 1, 0)) == (255, 0, 0)
+    finally:
+        image.close()
+
+
+def test_a_rotation_list_of_the_wrong_length_is_rejected(jpeg_300dpi, tmp_path):
+    with pytest.raises(ValueError):
+        images.images_to_pdf([jpeg_300dpi], tmp_path / "out.pdf", rotations=[90, 180])
+
+
+def test_an_illegal_rotation_is_rejected(jpeg_300dpi, tmp_path):
+    with pytest.raises(ValueError):
+        images.images_to_pdf([jpeg_300dpi], tmp_path / "out.pdf", rotations=[45])
+
+
+def test_a_thumbnail_fits_the_box_and_keeps_its_aspect_ratio(jpeg_300dpi):
+    with Image.open(str(jpeg_300dpi)) as source:
+        expected = source.width / float(source.height)
+    with Image.open(io.BytesIO(images.thumbnail_png(jpeg_300dpi))) as thumb:
+        assert max(thumb.size) <= images.THUMBNAIL_MAX_EDGE
+        assert abs(thumb.width / float(thumb.height) - expected) < 0.05
+        assert thumb.format == "PNG"
+
+
+def test_a_cmyk_source_yields_an_rgb_thumbnail(tmp_path):
+    # prepare_image keeps CMYK as CMYK for the PDF path, and PNG cannot hold
+    # it, so the thumbnail path has to convert or fail to save at all.
+    source = tmp_path / "cmyk.jpg"
+    Image.new("CMYK", (300, 200), (0, 40, 90, 5)).save(str(source), "JPEG")
+    with Image.open(io.BytesIO(images.thumbnail_png(source))) as thumb:
+        assert thumb.mode in ("RGB", "RGBA", "P", "L")
+
+
+def test_a_heic_yields_a_thumbnail(heic_image):
+    # The case the whole server-side approach exists for: no browser but
+    # Safari can render this one itself.
+    with Image.open(io.BytesIO(images.thumbnail_png(heic_image))) as thumb:
+        assert max(thumb.size) <= images.THUMBNAIL_MAX_EDGE

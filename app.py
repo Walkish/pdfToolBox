@@ -4,7 +4,9 @@ Routes stay thin: validate the upload, call one pdftools function, shape JSON.
 All real behaviour lives in pdftools/ and is tested without Flask.
 """
 
+import io
 import os
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -198,6 +200,34 @@ def _requested_preset() -> compress.Preset:
     return compress.PRESETS[preset_id]
 
 
+def _requested_rotations(count: int) -> List[int]:
+    """One clockwise angle per upload, indexed by upload position.
+
+    Absent entirely means no rotation, so a client that knows nothing about
+    this field -- an older page, or curl -- keeps working.
+    """
+    raw = request.form.getlist("rotations")
+    if not raw:
+        return [0] * count
+    if len(raw) != count:
+        abort(400, description="Expected one rotation per file, got {0} for {1}".format(len(raw), count))
+    rotations = []
+    for value in raw:
+        try:
+            rotation = int(value)
+        except ValueError:
+            abort(400, description="Rotation {0!r} is not a number".format(value))
+        if rotation not in images.VALID_ROTATIONS:
+            abort(
+                400,
+                description="Rotation {0} is not one of {1}".format(
+                    rotation, ", ".join(str(valid) for valid in images.VALID_ROTATIONS)
+                ),
+            )
+        rotations.append(rotation)
+    return rotations
+
+
 def _payload(job, results: List[Dict]) -> Dict:
     any_output = any(result["ok"] for result in results)
     return {
@@ -306,7 +336,11 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         output_name = validate.normalize_output_name(request.form.get("output_name", ""), "merged.pdf")
         merged = job.outputs / output_name
         try:
-            merge.merge_pdfs([record["path"] for record in usable], merged)
+            merge.merge_pdfs(
+                [record["path"] for record in usable],
+                merged,
+                normalize_pages=request.form.get("normalize") == "1",
+            )
         except (ToolError, ValueError, OSError) as exc:
             message = _redact(str(exc), *[(record["path"], record["name"]) for record in usable])
             results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
@@ -333,8 +367,47 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             results.append(_plain_success(job, index, output_name, merged))
         return jsonify(_payload(job, results))
 
+    @application.route("/api/thumbnail", methods=["POST"])
+    def api_thumbnail():
+        """A preview image for one upload, image or PDF. Stateless.
+
+        Dispatches on the declared extension the same way the upload routes
+        do, so the merge tab gets first-page previews of its PDFs from the
+        same endpoint the images tab uses.
+        """
+        storage = request.files.get("file")
+        if storage is None:
+            abort(400, description="No file was uploaded")
+        display_name = storage.filename or "upload"
+        is_pdf = Path(display_name).suffix.lower() in validate.PDF_EXTENSIONS
+        # Validated exactly like a real upload. Without this the endpoint is a
+        # second door into the decoders that skips the size and pixel-count
+        # limits, which is a hole rather than a convenience.
+        with tempfile.TemporaryDirectory(prefix="thumbnail-") as directory:
+            target = Path(directory) / "upload"
+            storage.save(str(target))
+            try:
+                if is_pdf:
+                    validate.validate_pdf_file(target, display_name)
+                    data = preview.pdf_thumbnail_png(target)
+                else:
+                    validate.validate_image_file(target, display_name)
+                    data = images.thumbnail_png(target)
+            except validate.ValidationError as exc:
+                abort(400, description=str(exc))
+            except ToolError as exc:
+                abort(400, description=_redact(str(exc), (target, display_name)))
+        response = send_file(io.BytesIO(data), mimetype="image/png")
+        # A preview of a file the user may replace under the same name.
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @application.route("/api/images", methods=["POST"])
     def api_images():
+        # Read before any upload is saved, the way api_merge validates its
+        # preset first: a malformed request must not burn real conversion work
+        # and then 400, abandoning an output to the TTL sweep.
+        rotations = _requested_rotations(len(request.files.getlist("files")))
         job = store.create()
         records = _saved_uploads(job, "image")
         if not records:
@@ -350,7 +423,16 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         output_name = validate.normalize_output_name(request.form.get("output_name", ""), "images.pdf")
         destination = job.outputs / output_name
         try:
-            images.images_to_pdf([record["path"] for record in usable], destination, work_dir=job.root)
+            images.images_to_pdf(
+                [record["path"] for record in usable],
+                destination,
+                work_dir=job.root,
+                # By upload position, not by index in the filtered list: when
+                # an upload in the middle fails validation, matching on the
+                # filtered index shifts every later rotation onto the wrong
+                # picture.
+                rotations=[rotations[record["position"]] for record in usable],
+            )
         except (ToolError, ValueError, OSError) as exc:
             message = _redact(str(exc), *[(record["path"], record["name"]) for record in usable])
             results.append(_failure(output_name, message, getattr(exc, "stderr", "")))

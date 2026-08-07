@@ -9,6 +9,19 @@ var TABS = {
   images: { files: [], endpoint: "/api/images", multiResult: false }
 };
 
+/* Rotation and preview live in maps keyed by the File object itself, not in
+   arrays parallel to state.files. A parallel array would have to be moved in
+   step at three separate sites -- add, remove, and the order buttons -- and a
+   single missed one silently rotates the wrong picture. File identity survives
+   every reordering for free. */
+var ROTATIONS = new Map();
+var THUMBNAILS = new Map();
+
+/* The images and merge tabs both list files whose names do not say much: one
+   scan looks like another. Compress is left out on purpose -- it neither
+   reorders nor rotates, so its rows have nothing to decide about. */
+function hasThumbnails(tabName) { return tabName === "images" || tabName === "merge"; }
+
 function byId(id) { return document.getElementById(id); }
 
 function humanSize(bytes) {
@@ -35,6 +48,9 @@ function renderFileList(tabName) {
   list.innerHTML = "";
   state.files.forEach(function (file, index) {
     var item = document.createElement("li");
+    if (hasThumbnails(tabName)) {
+      item.appendChild(thumbnailImage(file));
+    }
     var name = document.createElement("span");
     name.className = "fname";
     name.textContent = file.name;
@@ -50,11 +66,19 @@ function renderFileList(tabName) {
         orderButton(tabName, index, 1, "↓", index === state.files.length - 1)
       );
     }
+    if (tabName === "images") {
+      item.appendChild(rotateButton(tabName, file, -90, "↺", "Rotate left"));
+      item.appendChild(rotateButton(tabName, file, 90, "↻", "Rotate right"));
+    }
     var remove = document.createElement("button");
     remove.className = "icon";
     remove.textContent = "✕";
     remove.title = "Remove";
     remove.addEventListener("click", function () {
+      var stale = THUMBNAILS.get(file);
+      if (stale) { URL.revokeObjectURL(stale); }
+      THUMBNAILS.delete(file);
+      ROTATIONS.delete(file);
       state.files.splice(index, 1);
       renderFileList(tabName);
     });
@@ -62,6 +86,34 @@ function renderFileList(tabName) {
     list.appendChild(item);
   });
   byId(tabName + "-run").disabled = state.files.length === 0;
+}
+
+function thumbnailImage(file) {
+  var thumb = document.createElement("img");
+  thumb.className = "thumb";
+  thumb.alt = "";
+  var url = THUMBNAILS.get(file);
+  if (url) {
+    thumb.src = url;
+  } else {
+    thumb.classList.add("is-empty");
+  }
+  thumb.style.transform = "rotate(" + (ROTATIONS.get(file) || 0) + "deg)";
+  return thumb;
+}
+
+function rotateButton(tabName, file, delta, glyph, title) {
+  var button = document.createElement("button");
+  button.className = "icon";
+  button.textContent = glyph;
+  button.title = title;
+  button.addEventListener("click", function () {
+    // Kept in [0, 360) so the value sent is always one of 0/90/180/270, which
+    // is all the server accepts.
+    ROTATIONS.set(file, ((((ROTATIONS.get(file) || 0) + delta) % 360) + 360) % 360);
+    renderFileList(tabName);
+  });
+  return button;
 }
 
 function orderButton(tabName, index, delta, glyph, disabled) {
@@ -83,8 +135,30 @@ function addFiles(tabName, fileList) {
   var i;
   for (i = 0; i < fileList.length; i += 1) {
     TABS[tabName].files.push(fileList[i]);
+    if (hasThumbnails(tabName)) {
+      loadThumbnail(tabName, fileList[i]);
+    }
   }
   renderFileList(tabName);
+}
+
+/* Fetched once per file rather than on every render: renderFileList clears the
+   list with innerHTML = "" on each change, so a per-render fetch would
+   re-upload every image each time an arrow is pressed. */
+function loadThumbnail(tabName, file) {
+  var form = new FormData();
+  form.append("file", file);
+  fetch("/api/thumbnail", { method: "POST", body: form }).then(function (response) {
+    if (!response.ok) { throw new Error("no preview"); }
+    return response.blob();
+  }).then(function (blob) {
+    THUMBNAILS.set(file, URL.createObjectURL(blob));
+    renderFileList(tabName);
+  }).catch(function () {
+    // A preview that will not render is not a reason to block the build; the
+    // real error arrives when the PDF is built.
+    THUMBNAILS.set(file, null);
+  });
 }
 
 function selectedPreset(tabName) {
@@ -230,6 +304,16 @@ function run(tabName) {
   state.files.forEach(function (file) { form.append("files", file); });
   if (tabName === "compress") {
     form.append("preset", selectedPreset("compress"));
+  }
+  if (tabName === "images") {
+    // One entry per file, always, including zeros: that is what lines the list
+    // up with `files` index for index on the server.
+    state.files.forEach(function (file) {
+      form.append("rotations", String(ROTATIONS.get(file) || 0));
+    });
+  }
+  if (tabName === "merge" && byId("merge-normalize").checked) {
+    form.append("normalize", "1");
   }
   if (tabName === "merge" && byId("merge-compress").checked) {
     form.append("compress", "1");

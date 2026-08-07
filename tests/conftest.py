@@ -313,6 +313,74 @@ def _vector_pdf(path, markers, page_size=(612, 792)):
     return path
 
 
+def _box_pdf(path, page_size, inset=0.1):
+    """One page holding a single filled black rectangle, inset by ``inset`` of
+    each side.
+
+    Rendered, this page's ink bounding box *is* its content geometry, which is
+    what the normalization tests need: text fixtures only tell you roughly
+    where the ink is, and "rotated and fitted" versus "squashed into a band"
+    is a question about exact proportions.
+    """
+    width, height = page_size
+    x0 = width * inset
+    y0 = height * inset
+    stream = "0 0 0 rg {0:.2f} {1:.2f} {2:.2f} {3:.2f} re f\n".format(x0, y0, width - 2 * x0, height - 2 * y0).encode(
+        "ascii"
+    )
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {0} {1}] /Contents 4 0 R >>".format(width, height).encode("ascii"),
+        "<< /Length {0} >>\nstream\n".format(len(stream)).encode("ascii") + stream + b"endstream",
+    ]
+    with open(path, "wb") as handle:
+        handle.write(_build_pdf_bytes(objects))
+    return path
+
+
+@pytest.fixture
+def box_pdf_factory(tmp_path):
+    counter = {"n": 0}
+
+    def build(page_size):
+        counter["n"] += 1
+        return _box_pdf(tmp_path / "box_{0}.pdf".format(counter["n"]), page_size)
+
+    return build
+
+
+def _corner_mark_pdf(path, page_size, mark=40):
+    """One page with a small filled square in its bottom-left corner only.
+
+    A centred, symmetric shape cannot tell a clockwise rotation from a
+    counter-clockwise one -- it lands in the same bounding box either way. This
+    fixture is deliberately asymmetric so the direction is pinned down.
+    """
+    width, height = page_size
+    stream = "0 0 0 rg 0 0 {0} {1} re f\n".format(mark, mark).encode("ascii")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {0} {1}] /Contents 4 0 R >>".format(width, height).encode("ascii"),
+        "<< /Length {0} >>\nstream\n".format(len(stream)).encode("ascii") + stream + b"endstream",
+    ]
+    with open(path, "wb") as handle:
+        handle.write(_build_pdf_bytes(objects))
+    return path
+
+
+@pytest.fixture
+def corner_mark_pdf_factory(tmp_path):
+    counter = {"n": 0}
+
+    def build(page_size):
+        counter["n"] += 1
+        return _corner_mark_pdf(tmp_path / "corner_{0}.pdf".format(counter["n"]), page_size)
+
+    return build
+
+
 @pytest.fixture
 def vector_pdf_2pages(tmp_path):
     return _vector_pdf(tmp_path / "vector2.pdf", ["MARKER-1", "MARKER-2"])
@@ -322,9 +390,9 @@ def vector_pdf_2pages(tmp_path):
 def vector_pdf_factory(tmp_path):
     counter = {"n": 0}
 
-    def build(markers):
+    def build(markers, page_size=(612, 792)):
         counter["n"] += 1
-        return _vector_pdf(tmp_path / "vector_{0}.pdf".format(counter["n"]), markers)
+        return _vector_pdf(tmp_path / "vector_{0}.pdf".format(counter["n"]), markers, page_size=page_size)
 
     return build
 
@@ -448,4 +516,31 @@ def jpeg_300dpi(tmp_path):
     image = _render_text_page(1500, 1200, mode="RGB")
     path = tmp_path / "photo300.jpg"
     image.save(str(path), "JPEG", dpi=(300, 300), quality=92)
+    return path
+
+
+@pytest.fixture
+def heic_image(tmp_path):
+    """A plain RGB HEIC, written with pillow-heif rather than checked in."""
+    path = tmp_path / "photo.heic"
+    _render_text_page(400, 300, mode="RGB").save(str(path), quality=90)
+    return path
+
+
+@pytest.fixture
+def heic_rotated(tmp_path):
+    """A landscape HEIC carrying EXIF Orientation=6, as a phone writes for a
+    sideways shot.
+
+    HEIF can hold rotation in the container and in EXIF at once, which is the
+    classic way to end up rotating a page twice. Measured with pillow-heif
+    1.1.1: it applies the rotation on open and resets the EXIF tag to 1, so
+    exif_transpose does nothing further -- this fixture exists to keep that
+    true.
+    """
+    path = tmp_path / "sideways.heic"
+    image = _render_text_page(400, 200, mode="RGB")
+    exif = image.getexif()
+    exif[274] = 6
+    image.save(str(path), exif=exif.tobytes(), quality=90)
     return path

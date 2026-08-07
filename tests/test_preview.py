@@ -1,12 +1,14 @@
 """Tests for the before/after readability comparison."""
 
+import io
 import re
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageOps
 
-from pdftools import compress, preview
+from pdftools import compress, images, preview
+from pdftools.errors import ToolError
 from pdftools.inspect import PdfProfile, profile_pdf
 
 
@@ -125,3 +127,39 @@ def test_both_crops_fit_side_by_side_at_one_to_one_in_the_real_layout():
     # Still a useful amount of page: at 150 dpi this is inches of body text.
     assert preview.CROP_SIZE[0] / float(preview.PREVIEW_DPI) >= 2.5
     assert preview.CROP_SIZE[1] / float(preview.PREVIEW_DPI) >= 3.5
+
+
+def test_a_pdf_thumbnail_is_a_png_inside_the_box(vector_pdf_2pages):
+    data = preview.pdf_thumbnail_png(vector_pdf_2pages)
+    with Image.open(io.BytesIO(data)) as thumb:
+        assert thumb.format == "PNG"
+        assert max(thumb.size) <= preview.THUMBNAIL_MAX_EDGE
+
+
+def test_a_pdf_thumbnail_keeps_the_page_aspect_ratio(tmp_path, vector_pdf_factory):
+    # A deliberately wide page, so a squashed thumbnail would show up.
+    wide = vector_pdf_factory(["WIDE"], page_size=(842, 595))
+    with Image.open(io.BytesIO(preview.pdf_thumbnail_png(wide))) as thumb:
+        assert abs(thumb.width / float(thumb.height) - 842 / 595.0) < 0.05
+
+
+def test_a_pdf_thumbnail_shows_the_first_page(vector_pdf_factory):
+    # Rendered small, but the first page's ink still has to be there: a blank
+    # thumbnail would mean the wrong page or an empty render.
+    document = vector_pdf_factory(["FIRST", "SECOND"])
+    with Image.open(io.BytesIO(preview.pdf_thumbnail_png(document))) as thumb:
+        assert ImageOps.invert(thumb.convert("L")).getbbox() is not None
+
+
+def test_an_unreadable_pdf_thumbnail_raises_a_tool_error(tmp_path):
+    broken = tmp_path / "broken.pdf"
+    broken.write_bytes(b"%PDF-1.4 but not really")
+    with pytest.raises(ToolError):
+        preview.pdf_thumbnail_png(broken)
+
+
+def test_pdf_and_image_thumbnails_share_a_size():
+    # The two modules define this separately on purpose -- a page preview has
+    # no business importing the image-to-PDF converter -- so the claim that
+    # they stay in step is asserted rather than left to a comment.
+    assert preview.THUMBNAIL_MAX_EDGE == images.THUMBNAIL_MAX_EDGE

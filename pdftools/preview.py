@@ -7,7 +7,9 @@ matter.
 """
 
 import dataclasses
+import io
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -44,6 +46,36 @@ class Comparison:
     after: Path
     page: int
     dpi: int
+
+
+# Matches images.THUMBNAIL_MAX_EDGE, so a PDF row and an image row are the
+# same size in the file list. Not imported from there: the two modules are
+# independent, and a preview of a page has no business depending on the
+# image-to-PDF converter.
+THUMBNAIL_MAX_EDGE = 320
+# Low enough that rendering a thumbnail is cheap, high enough that a portrait
+# A4 comes out around 410x580 -- above the box, so the downscale below has real
+# pixels to work with rather than upsampling a blurry render.
+THUMBNAIL_DPI = 50
+
+
+def pdf_thumbnail_png(pdf_path, max_edge: int = THUMBNAIL_MAX_EDGE) -> bytes:
+    """PNG bytes of a small preview of the PDF's first page.
+
+    The merge tab lists PDFs, and a filename alone does not tell two scans
+    apart. Rendered through the same pdftoppm this module already uses for the
+    before/after comparison.
+    """
+    with tempfile.TemporaryDirectory(prefix="pdf-thumb-") as directory:
+        rendered = render_page(pdf_path, 1, THUMBNAIL_DPI, Path(directory) / "page")
+        with Image.open(str(rendered)) as image:
+            image.load()
+            preview_image = image.convert("RGB")
+    preview_image.thumbnail((max_edge, max_edge))
+    buffer = io.BytesIO()
+    preview_image.save(buffer, "PNG")
+    preview_image.close()
+    return buffer.getvalue()
 
 
 def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:

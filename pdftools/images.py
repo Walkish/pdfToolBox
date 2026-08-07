@@ -6,6 +6,7 @@ it has any, and falls back to 300 dpi otherwise, which keeps pages a sane size
 for printing instead of the 55-inch monsters a 72 dpi assumption produces.
 """
 
+import io
 import shutil
 import tempfile
 from pathlib import Path
@@ -20,6 +21,18 @@ DEFAULT_IMAGE_DPI = 300
 # Outside this range, embedded dpi metadata is more likely wrong than useful.
 _MIN_SANE_DPI = 36
 _MAX_SANE_DPI = 1200
+
+VALID_ROTATIONS = (0, 90, 180, 270)
+
+# Pillow's Transpose constants turn counter-clockwise, so the clockwise angle
+# the UI sends maps to its mirror image here. Measured: ROTATE_270 sends the
+# top-left pixel to the top-right, which is the clockwise quarter turn, and
+# matches CSS rotate(90deg) so the preview and the page agree.
+_CLOCKWISE_TRANSPOSE = {
+    90: Image.Transpose.ROTATE_270,
+    180: Image.Transpose.ROTATE_180,
+    270: Image.Transpose.ROTATE_90,
+}
 
 
 def _declared_dpi(image: Image.Image) -> float:
@@ -40,8 +53,15 @@ def _declared_dpi(image: Image.Image) -> float:
     return float(DEFAULT_IMAGE_DPI)
 
 
-def prepare_image(path) -> Tuple[Image.Image, float]:
-    """Return a print-ready copy of the image plus the dpi to lay it out at."""
+def prepare_image(path, rotation: int = 0) -> Tuple[Image.Image, float]:
+    """Return a print-ready copy of the image plus the dpi to lay it out at.
+
+    ``rotation`` is clockwise degrees and must be one of ``VALID_ROTATIONS``.
+    It is applied after the EXIF correction, so a user's rotation lands on top
+    of the orientation the camera already recorded rather than fighting it.
+    """
+    if rotation not in VALID_ROTATIONS:
+        raise ValueError("rotation must be one of {0}, got {1!r}".format(VALID_ROTATIONS, rotation))
     path = Path(path)
     try:
         with Image.open(str(path)) as opened:
@@ -50,6 +70,8 @@ def prepare_image(path) -> Tuple[Image.Image, float]:
             # A phone photo is stored sideways with an orientation tag; without
             # this the page comes out rotated.
             image = ImageOps.exif_transpose(opened)
+            if rotation:
+                image = image.transpose(_CLOCKWISE_TRANSPOSE[rotation])
             if image.mode == "CMYK":
                 return image.copy(), dpi
             if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
@@ -76,17 +98,62 @@ def prepare_image(path) -> Tuple[Image.Image, float]:
         raise ToolError("Could not read image {0}: {1}".format(path.name, exc)) from exc
 
 
-def images_to_pdf(paths: List[Path], dst, work_dir: Optional[Path] = None) -> Path:
-    """Convert ``paths`` into a single PDF at ``dst``, one page per image."""
+# The row shows this at 120 px, so 320 keeps it sharp on a retina screen with
+# room to spare, and still costs nothing to produce or transfer over loopback.
+# Kept in step with preview.THUMBNAIL_MAX_EDGE so image and PDF rows match.
+THUMBNAIL_MAX_EDGE = 320
+
+
+def thumbnail_png(path, max_edge: int = THUMBNAIL_MAX_EDGE) -> bytes:
+    """PNG bytes of a small preview of ``path``.
+
+    Rendered through prepare_image, so the EXIF orientation is already resolved
+    and the preview shows what the page will show. The user's own rotation is
+    not applied here: the browser turns the thumbnail with CSS, which is
+    instant and costs no round trip.
+    """
+    image, _dpi = prepare_image(path)
+    try:
+        if image.mode != "RGB":
+            # prepare_image hands CMYK back as CMYK for the PDF path, and PNG
+            # cannot hold CMYK at all.
+            converted = image.convert("RGB")
+            image.close()
+            image = converted
+        image.thumbnail((max_edge, max_edge))
+        buffer = io.BytesIO()
+        image.save(buffer, "PNG")
+        return buffer.getvalue()
+    finally:
+        image.close()
+
+
+def images_to_pdf(
+    paths: List[Path],
+    dst,
+    work_dir: Optional[Path] = None,
+    rotations: Optional[List[int]] = None,
+) -> Path:
+    """Convert ``paths`` into a single PDF at ``dst``, one page per image.
+
+    ``rotations`` is one clockwise angle per path, or None for no rotation at
+    all -- which is what every caller that does not care passes implicitly.
+    """
     if not paths:
         raise ValueError("images_to_pdf needs at least one image")
+    if rotations is None:
+        rotations = [0] * len(paths)
+    elif len(rotations) != len(paths):
+        raise ValueError(
+            "images_to_pdf needs one rotation per image, got {0} for {1}".format(len(rotations), len(paths))
+        )
     dst = Path(dst)
     created_temp = work_dir is None
     directory = Path(tempfile.mkdtemp(prefix="img2pdf-")) if created_temp else Path(work_dir)
     try:
         page_paths = []
         for index, path in enumerate(paths):
-            image, dpi = prepare_image(path)
+            image, dpi = prepare_image(path, rotations[index])
             page_path = directory / "page_{0:04d}.pdf".format(index)
             try:
                 image.save(str(page_path), "PDF", resolution=dpi)

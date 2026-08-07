@@ -4,9 +4,11 @@ import io
 import zipfile
 
 import pytest
+from PIL import Image
+from pypdf import PdfReader
 
 import app as app_module
-from pdftools import jobs
+from pdftools import jobs, pagesize
 
 
 @pytest.fixture
@@ -480,3 +482,167 @@ def test_index_wires_up_the_assets_and_the_print_warning_copy(client):
 def test_static_assets_are_served(client):
     for path in ("/static/app.js", "/static/style.css"):
         assert client.get(path).status_code == 200
+
+
+def merged_page_sizes(client, payload):
+    downloaded = client.get(payload["results"][0]["download_url"]).get_data()
+    return [pagesize.visible_size(page) for page in PdfReader(io.BytesIO(downloaded)).pages]
+
+
+def test_merge_normalizes_page_sizes_when_asked(client, vector_pdf_factory):
+    # The A4 input carries two pages and the photo one, so A4 wins the count
+    # outright. With one page each the batch would tie, and a tie goes to the
+    # larger area -- correct behaviour, but the opposite of the point here.
+    a4 = vector_pdf_factory(["ALPHA", "GAMMA"], page_size=(595, 842))
+    photo = vector_pdf_factory(["BETA"], page_size=(1200, 1600))
+    payload = client.post(
+        "/api/merge",
+        data={"files": [upload(a4, "a4.pdf"), upload(photo, "photo.pdf")], "normalize": "1"},
+        content_type="multipart/form-data",
+    ).get_json()
+    assert payload["results"][0]["ok"] is True
+    assert merged_page_sizes(client, payload) == [(595.0, 842.0)] * 3
+
+
+def test_merge_leaves_page_sizes_alone_without_the_field(client, vector_pdf_factory):
+    a4 = vector_pdf_factory(["ALPHA", "GAMMA"], page_size=(595, 842))
+    photo = vector_pdf_factory(["BETA"], page_size=(1200, 1600))
+    payload = client.post(
+        "/api/merge",
+        data={"files": [upload(a4, "a4.pdf"), upload(photo, "photo.pdf")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    assert merged_page_sizes(client, payload) == [(595.0, 842.0), (595.0, 842.0), (1200.0, 1600.0)]
+
+
+def test_images_endpoint_accepts_a_heic(client, heic_image):
+    payload = client.post(
+        "/api/images",
+        data={"files": [upload(heic_image, "photo.heic")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    result = payload["results"][0]
+    assert result["ok"] is True
+    assert client.get(result["download_url"]).get_data()[:5] == b"%PDF-"
+
+
+def _page_sizes(client, result):
+    downloaded = client.get(result["download_url"]).get_data()
+    return [
+        (float(page.mediabox.width), float(page.mediabox.height)) for page in PdfReader(io.BytesIO(downloaded)).pages
+    ]
+
+
+def test_thumbnail_returns_a_png(client, jpeg_300dpi):
+    response = client.post(
+        "/api/thumbnail",
+        data={"file": upload(jpeg_300dpi, "photo.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.get_data()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_thumbnail_works_for_heic(client, heic_image):
+    response = client.post(
+        "/api/thumbnail",
+        data={"file": upload(heic_image, "photo.heic")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert response.get_data()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_thumbnail_rejects_a_pdf_renamed_to_png(client, vector_pdf_2pages):
+    response = client.post(
+        "/api/thumbnail",
+        data={"file": upload(vector_pdf_2pages, "sneaky.png")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_images_endpoint_applies_a_rotation(client, jpeg_300dpi):
+    turned = _page_sizes(
+        client,
+        client.post(
+            "/api/images",
+            data={"files": [upload(jpeg_300dpi, "a.jpg")], "rotations": ["90"]},
+            content_type="multipart/form-data",
+        ).get_json()["results"][0],
+    )
+    upright = _page_sizes(
+        client,
+        client.post(
+            "/api/images",
+            data={"files": [upload(jpeg_300dpi, "a.jpg")]},
+            content_type="multipart/form-data",
+        ).get_json()["results"][0],
+    )
+    assert turned[0] == pytest.approx((upright[0][1], upright[0][0]), abs=0.5)
+
+
+def test_a_wrong_length_rotation_list_is_a_400(client, jpeg_300dpi):
+    response = client.post(
+        "/api/images",
+        data={"files": [upload(jpeg_300dpi, "a.jpg")], "rotations": ["90", "180"]},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_an_illegal_rotation_angle_is_a_400(client, jpeg_300dpi):
+    response = client.post(
+        "/api/images",
+        data={"files": [upload(jpeg_300dpi, "a.jpg")], "rotations": ["45"]},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_rotations_stay_with_their_images_when_one_upload_fails(client, jpeg_300dpi, png_rgba):
+    # Three uploads, the middle one unreadable, three different angles. If the
+    # route matched rotations against the surviving files by their position in
+    # the filtered list, the third file would receive the second file's angle
+    # and come out unrotated.
+    payload = client.post(
+        "/api/images",
+        data={
+            "files": [
+                upload(jpeg_300dpi, "first.jpg"),
+                (io.BytesIO(b"not an image at all"), "broken.png"),
+                upload(png_rgba, "third.png"),
+            ],
+            "rotations": ["0", "180", "90"],
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    by_name = {result["name"]: result for result in payload["results"]}
+    assert by_name["broken.png"]["ok"] is False
+    built = [result for result in payload["results"] if result.get("ok")][0]
+    sizes = _page_sizes(client, built)
+    with Image.open(str(png_rgba)) as third:
+        third_ratio = third.width / float(third.height)
+    # The surviving second page is the third upload, which asked for 90.
+    assert sizes[1][0] / sizes[1][1] == pytest.approx(1 / third_ratio, abs=0.05)
+
+
+def test_thumbnail_renders_a_pdf(client, vector_pdf_2pages):
+    response = client.post(
+        "/api/thumbnail",
+        data={"file": upload(vector_pdf_2pages, "doc.pdf")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.get_data()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_thumbnail_rejects_a_png_renamed_to_pdf(client, png_rgba):
+    response = client.post(
+        "/api/thumbnail",
+        data={"file": upload(png_rgba, "disguised.pdf")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400

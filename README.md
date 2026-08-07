@@ -3,6 +3,20 @@
 A localhost web tool for three PDF chores: compressing PDFs without making them
 unprintable, merging PDFs, and turning images into a PDF.
 
+Images can be PNG, JPEG, WebP or HEIC — the format an iPhone shoots by default.
+One image becomes one page, sized from the image itself. Each row shows a
+thumbnail with two rotate buttons, so a photo that came out sideways can be
+turned a quarter at a time before the PDF is built.
+
+The merge tab shows thumbnails too — the first page of each PDF — because one
+scan's filename looks much like another's. It has no rotate buttons: merging
+does not re-render pages.
+
+Thumbnails are rendered by the server rather than by the browser, because no
+browser except Safari can display HEIC, and a PDF cannot be shown in an `<img>`
+at all. Rotation is sent as an angle and applied server-side when the page is
+written, so nothing is re-encoded in the browser first.
+
 ## Contents
 
 - [Requirements](#requirements)
@@ -10,6 +24,7 @@ unprintable, merging PDFs, and turning images into a PDF.
 - [Run](#run)
 - [Running on Windows](#running-on-windows)
 - [Compression levels](#compression-levels)
+- [Matching page sizes when merging](#matching-page-sizes-when-merging)
 - [Known limitations](#known-limitations)
 - [Tests](#tests)
 - [Lint and type checks](#lint-and-type-checks)
@@ -214,12 +229,47 @@ way and needs rescanning, not a different setting.
 Files whose images are already at or below the target are not resampled, and a
 file that would come out larger is returned unchanged.
 
+## Matching page sizes when merging
+
+Merging documents whose pages differ in size gives you one that jumps around on
+screen and prints at inconsistent scales — an A4 scan next to a page built from
+a phone photo. **Match page sizes**, in the merge tab and on by default, fits
+every page to the size that dominates the batch.
+
+The target is the most common page size among the merged pages, so 20 A4 pages
+plus 2 photos produce an A4 document. Ties go to the larger size. Pages already
+at that size are not touched at all: with a batch that is uniform to begin with,
+ticking the box produces a byte-for-byte identical file to leaving it unticked.
+
+Odd-sized pages are scaled by a single factor and centred, so proportions are
+exact and nothing is stretched. A landscape page meeting a portrait target is
+turned 90° counter-clockwise rather than shrunk into a band across the middle —
+you turn the document clockwise to read it, the usual convention. Content is
+transformed, never re-rendered, so text stays text and vector art stays vector:
+matching page sizes costs no quality.
+
+Untick the box for documents where the geometry is the point — drawings to
+scale, forms — and you get the plain page-for-page merge.
+
 ## Known limitations
 
 - Digital signatures do not survive compression: Ghostscript writes a new file.
+- When **Match page sizes** resizes a page whose CropBox is smaller than its
+  MediaBox, content hidden outside that CropBox — printer crop marks, most
+  likely — is not clipped away and can appear in the new margins. Pages already
+  at the target size are untouched, so this cannot affect a page merely for
+  having a CropBox.
 - PDF/A conformance and accessibility tags may be dropped.
 - Interactive form fields may lose behaviour, though field values are kept.
 - Merging does not deduplicate resources shared between input files.
+- HEIF decoding is pinned to `pillow-heif==1.1.1`, the last release with Python
+  3.9 wheels. It cannot be updated until this project's Python moves off 3.9.
+- A burst or Live Photo contributes its primary image only, so one HEIC file is
+  always one page.
+- Rotations are lost if the page is reloaded before the PDF is built, as is the
+  file list itself.
+- The thumbnail is a preview, not a proof: it is rendered small, so it shows
+  orientation and framing rather than fine detail.
 
 ## Tests
 
