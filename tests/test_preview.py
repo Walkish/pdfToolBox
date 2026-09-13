@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageOps
 
-from pdftools import compress, images, preview
+from pdftools import compress, images, merge, preview
 from pdftools.errors import ToolError
 from pdftools.inspect import PdfProfile, profile_pdf
 
@@ -163,3 +163,16 @@ def test_pdf_and_image_thumbnails_share_a_size():
     # no business importing the image-to-PDF converter -- so the claim that
     # they stay in step is asserted rather than left to a comment.
     assert preview.THUMBNAIL_MAX_EDGE == images.THUMBNAIL_MAX_EDGE
+
+
+def test_a_thumbnail_can_be_asked_for_a_later_page(box_pdf_factory, tmp_path):
+    # Portrait first, landscape second: the aspect ratio says which page was
+    # rendered, where two pages of text at 50 dpi would look identical.
+    document = merge.merge_pdfs([box_pdf_factory((612, 792)), box_pdf_factory((842, 595))], tmp_path / "mixed.pdf")
+    with Image.open(io.BytesIO(preview.pdf_thumbnail_png(document, page=2))) as thumb:
+        assert thumb.width > thumb.height
+
+
+def test_a_thumbnail_of_a_page_that_does_not_exist_raises_a_tool_error(vector_pdf_2pages):
+    with pytest.raises(ToolError):
+        preview.pdf_thumbnail_png(vector_pdf_2pages, page=3)
