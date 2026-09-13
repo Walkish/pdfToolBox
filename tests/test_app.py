@@ -12,9 +12,13 @@ from pdftools import jobs, pagesize
 
 
 @pytest.fixture
-def client(tmp_path):
-    store = jobs.JobStore(base_dir=tmp_path / "jobs")
-    application = app_module.create_app(job_store=store)
+def job_store(tmp_path):
+    return jobs.JobStore(base_dir=tmp_path / "jobs")
+
+
+@pytest.fixture
+def client(job_store):
+    application = app_module.create_app(job_store=job_store)
     application.config["TESTING"] = True
     with application.test_client() as test_client:
         yield test_client
@@ -42,12 +46,24 @@ def test_resolve_port_rejects_a_non_integer_value(monkeypatch):
     assert "PDFTOOLBOX_PORT" in str(excinfo.value)
 
 
-def test_index_serves_the_three_tabs(client):
+def test_index_serves_every_tab(client):
     response = client.get("/")
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    for label in ("Compress", "Merge", "Images"):
+    for label in ("Compress", "Merge", "Images", "Split"):
         assert label in body
+
+
+def test_index_wires_up_the_split_tab(client):
+    """The split tab owns its own script and grid; served without them the
+    tab is a drop zone that does nothing."""
+    body = client.get("/").get_data(as_text=True)
+    assert 'id="split-pages"' in body
+    assert "/static/split.js" in body
+
+
+def test_the_split_script_is_served(client):
+    assert client.get("/static/split.js").status_code == 200
 
 
 def test_presets_endpoint_lists_the_ladder_and_the_default(client):
@@ -646,3 +662,219 @@ def test_thumbnail_rejects_a_png_renamed_to_pdf(client, png_rgba):
         content_type="multipart/form-data",
     )
     assert response.status_code == 400
+
+
+def open_split(client, path, name="doc.pdf"):
+    """Start a split session and return its payload."""
+    response = client.post("/api/split", data={"files": upload(path, name)}, content_type="multipart/form-data")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.get_json()
+
+
+def pdf_pages(data):
+    return PdfReader(io.BytesIO(data)).pages
+
+
+def test_opening_a_document_reports_its_page_count(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B", "C"]), "report.pdf")
+    assert payload["page_count"] == 3
+    assert payload["name"] == "report.pdf"
+    assert payload["job_id"]
+
+
+def test_opening_refuses_a_png_renamed_to_pdf(client, png_rgba):
+    response = client.post(
+        "/api/split", data={"files": upload(png_rgba, "sneaky.pdf")}, content_type="multipart/form-data"
+    )
+    assert response.status_code == 400
+
+
+def test_opening_refuses_an_empty_request(client):
+    assert client.post("/api/split", data={}, content_type="multipart/form-data").status_code == 400
+
+
+def test_opening_refuses_a_second_document(client, vector_pdf_factory):
+    """One document at a time: a silently ignored second upload would leave
+    the user looking at pages they did not ask for."""
+    first = vector_pdf_factory(["A"])
+    second = vector_pdf_factory(["B"])
+    response = client.post(
+        "/api/split",
+        data={"files": [upload(first, "one.pdf"), upload(second, "two.pdf")]},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_a_page_preview_is_a_png(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    response = client.get("/api/split/{0}/pages/2.png".format(payload["job_id"]))
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    with Image.open(io.BytesIO(response.get_data())) as image:
+        assert image.format == "PNG"
+
+
+def test_a_page_preview_shows_the_page_that_was_asked_for(client, box_pdf_factory, tmp_path, vector_pdf_factory):
+    from pdftools import merge as merge_module
+
+    document = merge_module.merge_pdfs(
+        [box_pdf_factory((612, 792)), box_pdf_factory((842, 595))], tmp_path / "mixed.pdf"
+    )
+    payload = open_split(client, document)
+    response = client.get("/api/split/{0}/pages/2.png".format(payload["job_id"]))
+    with Image.open(io.BytesIO(response.get_data())) as image:
+        assert image.width > image.height
+
+
+def test_a_page_preview_is_rendered_once_and_then_cached(client, job_store, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    url = "/api/split/{0}/pages/1.png".format(payload["job_id"])
+    client.get(url)
+    cached = list((job_store.get(payload["job_id"]).previews).glob("pages/*.png"))
+    assert len(cached) == 1
+    stamped = cached[0].stat().st_mtime_ns
+    client.get(url)
+    assert cached[0].stat().st_mtime_ns == stamped
+
+
+def test_a_preview_of_a_page_past_the_end_is_not_found(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    assert client.get("/api/split/{0}/pages/3.png".format(payload["job_id"])).status_code == 404
+
+
+def test_page_numbers_start_at_one(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    assert client.get("/api/split/{0}/pages/0.pdf".format(payload["job_id"])).status_code == 404
+
+
+def test_an_unknown_split_job_is_not_found(client):
+    assert client.get("/api/split/nosuchjob/pages/1.png").status_code == 404
+
+
+def test_one_page_downloads_on_its_own(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["ONE", "TWO", "THREE"]))
+    response = client.get("/api/split/{0}/pages/2.pdf".format(payload["job_id"]))
+    assert response.status_code == 200
+    pages = pdf_pages(response.get_data())
+    assert len(pages) == 1
+    assert "TWO" in pages[0].extract_text()
+
+
+def test_a_downloaded_page_says_which_page_it_was(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]), "report.pdf")
+    response = client.get("/api/split/{0}/pages/2.pdf".format(payload["job_id"]))
+    assert "report-page-2.pdf" in response.headers["Content-Disposition"]
+
+
+def test_a_downloaded_page_can_be_turned(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    response = client.get("/api/split/{0}/pages/1.pdf?rotate=90".format(payload["job_id"]))
+    assert pdf_pages(response.get_data())[0].rotation == 90
+
+
+def test_an_angle_that_is_not_a_quarter_turn_is_refused(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A"]))
+    assert client.get("/api/split/{0}/pages/1.pdf?rotate=45".format(payload["job_id"])).status_code == 400
+
+
+def test_building_keeps_the_chosen_pages_in_the_chosen_order(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["ALPHA", "BETA", "GAMMA"]))
+    built = client.post(
+        "/api/split/{0}/build".format(payload["job_id"]),
+        data={"order": ["3", "1"], "rotations": ["0", "0"]},
+    ).get_json()
+    assert built["results"][0]["ok"] is True
+    downloaded = client.get(built["results"][0]["download_url"]).get_data()
+    pages = pdf_pages(downloaded)
+    assert len(pages) == 2
+    assert "GAMMA" in pages[0].extract_text()
+    assert "ALPHA" in pages[1].extract_text()
+
+
+def test_building_turns_the_pages_it_was_told_to(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    built = client.post(
+        "/api/split/{0}/build".format(payload["job_id"]),
+        data={"order": ["1", "2"], "rotations": ["0", "270"]},
+    ).get_json()
+    pages = pdf_pages(client.get(built["results"][0]["download_url"]).get_data())
+    assert [page.rotation for page in pages] == [0, 270]
+
+
+def test_building_can_match_the_page_sizes(client, box_pdf_factory, tmp_path):
+    from pdftools import merge as merge_module
+
+    document = merge_module.merge_pdfs(
+        [box_pdf_factory((612, 792)), box_pdf_factory((612, 792)), box_pdf_factory((1224, 1584))],
+        tmp_path / "mixed.pdf",
+    )
+    payload = open_split(client, document)
+    built = client.post(
+        "/api/split/{0}/build".format(payload["job_id"]),
+        data={"order": ["1", "2", "3"], "normalize": "1"},
+    ).get_json()
+    pages = pdf_pages(client.get(built["results"][0]["download_url"]).get_data())
+    assert [pagesize.visible_size(page) for page in pages] == [(612.0, 792.0)] * 3
+
+
+def test_building_nothing_is_refused(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A"]))
+    response = client.post("/api/split/{0}/build".format(payload["job_id"]), data={})
+    assert response.status_code == 400
+
+
+def test_building_a_page_past_the_end_is_refused(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    response = client.post("/api/split/{0}/build".format(payload["job_id"]), data={"order": ["3"]})
+    assert response.status_code == 400
+
+
+def test_the_built_pages_are_also_offered_one_file_each(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["ALPHA", "BETA", "GAMMA"]), "report.pdf")
+    built = client.post(
+        "/api/split/{0}/build".format(payload["job_id"]),
+        data={"order": ["3", "1"], "rotations": ["0", "90"]},
+    ).get_json()
+    archive = client.get(built["zip_url"])
+    assert archive.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(archive.get_data())) as zipped:
+        names = sorted(zipped.namelist())
+        assert names == ["report-page-1.pdf", "report-page-3.pdf"]
+        first = pdf_pages(zipped.read("report-page-3.pdf"))
+        assert len(first) == 1
+        assert "GAMMA" in first[0].extract_text()
+        assert pdf_pages(zipped.read("report-page-1.pdf"))[0].rotation == 90
+
+
+def test_the_page_zip_is_not_there_before_anything_is_built(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A"]))
+    assert client.get("/api/split/{0}/pages.zip".format(payload["job_id"])).status_code == 404
+
+
+def test_looking_at_pages_keeps_the_session_from_expiring(client, job_store, vector_pdf_factory):
+    """A document is edited over minutes, not in one request: the sweep must
+    not take it away mid-edit."""
+    import os
+    import time
+
+    job_store.ttl_seconds = 60
+    payload = open_split(client, vector_pdf_factory(["A", "B"]))
+    job = job_store.get(payload["job_id"])
+    old = time.time() - 3600
+    os.utime(str(job.root), (old, old))
+    client.get("/api/split/{0}/pages/1.png".format(payload["job_id"]))
+    assert job_store.cleanup_expired() == 0
+    assert job.root.exists()
+
+
+def test_the_page_zip_is_named_like_the_pages_inside_it(client, vector_pdf_factory):
+    """The members go through normalize_output_name; the archive holding them
+    must not be the one name that escapes it."""
+    payload = open_split(client, vector_pdf_factory(["A", "B"]), "Holiday Scan.pdf")
+    client.post(
+        "/api/split/{0}/build".format(payload["job_id"]),
+        data={"order": ["1", "2"]},
+    )
+    response = client.get("/api/split/{0}/pages.zip".format(payload["job_id"]))
+    assert "Holiday_Scan-pages.zip" in response.headers["Content-Disposition"]

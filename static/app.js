@@ -1,7 +1,11 @@
 "use strict";
 
 /* Three tabs, each owning an ordered file list and a results list.
-   State is one object per tab; no framework, no build step. */
+   State is one object per tab; no framework, no build step.
+
+   The fourth tab, Split, lives in split.js: it sends a page order rather than
+   a list of files, so it does not fit the shape run() below expects. It uses
+   byId, humanSize, wireDropZone and resultRow from here. */
 
 var TABS = {
   compress: { files: [], endpoint: "/api/compress", multiResult: true },
@@ -129,6 +133,35 @@ function orderButton(tabName, index, delta, glyph, disabled) {
     renderFileList(tabName);
   });
   return button;
+}
+
+/* Shared with split.js, which owns a tab of its own: the drop zone, the
+   hidden file input and the drag highlighting are identical there, and the
+   only thing that differs is what happens to the files. */
+function wireDropZone(tabName, onFiles) {
+  var input = byId(tabName + "-input");
+  input.addEventListener("change", function () {
+    onFiles(input.files);
+    // Cleared so choosing the same file twice in a row still fires change.
+    input.value = "";
+  });
+
+  var drop = document.querySelector("[data-drop='" + tabName + "']");
+  ["dragenter", "dragover"].forEach(function (name) {
+    drop.addEventListener(name, function (event) {
+      event.preventDefault();
+      drop.classList.add("is-over");
+    });
+  });
+  ["dragleave", "drop"].forEach(function (name) {
+    drop.addEventListener(name, function (event) {
+      event.preventDefault();
+      drop.classList.remove("is-over");
+    });
+  });
+  drop.addEventListener("drop", function (event) {
+    onFiles(event.dataTransfer.files);
+  });
 }
 
 function addFiles(tabName, fileList) {
@@ -363,29 +396,7 @@ function run(tabName) {
   }
 
   Object.keys(TABS).forEach(function (tabName) {
-    var input = byId(tabName + "-input");
-    input.addEventListener("change", function () {
-      addFiles(tabName, input.files);
-      input.value = "";
-    });
-
-    var drop = document.querySelector("[data-drop='" + tabName + "']");
-    ["dragenter", "dragover"].forEach(function (name) {
-      drop.addEventListener(name, function (event) {
-        event.preventDefault();
-        drop.classList.add("is-over");
-      });
-    });
-    ["dragleave", "drop"].forEach(function (name) {
-      drop.addEventListener(name, function (event) {
-        event.preventDefault();
-        drop.classList.remove("is-over");
-      });
-    });
-    drop.addEventListener("drop", function (event) {
-      addFiles(tabName, event.dataTransfer.files);
-    });
-
+    wireDropZone(tabName, function (files) { addFiles(tabName, files); });
     byId(tabName + "-run").addEventListener("click", function () { run(tabName); });
   });
 

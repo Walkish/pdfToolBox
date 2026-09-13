@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from pdftools import binaries, compress, images, jobs, merge, preview, validate
+from pdftools import binaries, compress, images, jobs, merge, preview, split, validate
 
 # Imported from its own module rather than as compress.ToolError: merge,
 # images and preview raise this same class, and naming it after compress
@@ -228,6 +228,65 @@ def _requested_rotations(count: int) -> List[int]:
     return rotations
 
 
+def _requested_page_numbers(job) -> List[int]:
+    """The chosen pages, converted from the one-based numbers the client
+    sends to the zero-based indexes ``split`` works in.
+
+    One-based is what the user sees on the page and what every other PDF tool
+    prints, so that is what the API speaks; the conversion happens here, once,
+    rather than being spread over the routes.
+    """
+    raw = request.form.getlist("order")
+    if not raw:
+        abort(400, description="No pages were chosen")
+    count = job.meta["page_count"]
+    order = []
+    for value in raw:
+        try:
+            number = int(value)
+        except ValueError:
+            abort(400, description="Page {0!r} is not a number".format(value))
+        if number < 1 or number > count:
+            abort(400, description="Page {0} is not in a {1}-page document".format(number, count))
+        order.append(number - 1)
+    return order
+
+
+def _requested_rotation_argument() -> int:
+    """The single angle on a per-page download link, absent meaning none."""
+    raw = request.args.get("rotate", "0")
+    try:
+        rotation = int(raw)
+    except ValueError:
+        abort(400, description="Rotation {0!r} is not a number".format(raw))
+    if rotation not in split.VALID_ROTATIONS:
+        abort(
+            400,
+            description="Rotation {0} is not one of {1}".format(
+                rotation, ", ".join(str(valid) for valid in split.VALID_ROTATIONS)
+            ),
+        )
+    return rotation
+
+
+def _page_file_name(display_name: str, number: int) -> str:
+    """What one page downloads as: the document's name plus its page number."""
+    stem = Path(jobs.safe_display_name(display_name)).stem or "document"
+    fallback = "page-{0}.pdf".format(number)
+    return validate.normalize_output_name("{0}-page-{1}.pdf".format(stem, number), fallback)
+
+
+def _pages_zip_name(display_name: str) -> str:
+    """What the archive of single pages downloads as.
+
+    Normalized like the files inside it: the members go through
+    ``normalize_output_name`` on their way into the zip, and an archive named
+    by a different rule is the one name that escapes it.
+    """
+    stem = Path(jobs.safe_display_name(display_name)).stem or "document"
+    return validate.normalize_output_name("{0}-pages.zip".format(stem), "pages.zip")
+
+
 def _payload(job, results: List[Dict]) -> Dict:
     any_output = any(result["ok"] for result in results)
     return {
@@ -440,6 +499,150 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         index = job.add_output(destination, output_name)
         results.append(_plain_success(job, index, output_name, destination))
         return jsonify(_payload(job, results))
+
+    @application.route("/api/split", methods=["POST"])
+    def api_split():
+        """Open one document for page-by-page editing.
+
+        Unlike every other upload route, this one keeps the file: the pages
+        are previewed, reordered and downloaded over many later requests, so
+        the job outlives the request that made it.
+        """
+        if len(request.files.getlist("files")) > 1:
+            abort(400, description="Split works on one document at a time")
+        job = store.create()
+        records = _saved_uploads(job, "pdf")
+        if not records:
+            abort(400, description="No files were uploaded")
+        record = records[0]
+        if "error" in record:
+            abort(400, description=record["error"])
+        try:
+            count = split.page_count(record["path"])
+        except ToolError as exc:
+            abort(400, description=_redact(str(exc), (record["path"], record["name"])))
+        job.meta["source"] = record["path"]
+        job.meta["name"] = record["name"]
+        job.meta["page_count"] = count
+        return jsonify({"job_id": job.id, "name": record["name"], "page_count": count})
+
+    def _split_job_or_404(job_id: str):
+        """The split session behind ``job_id``, marked as still in use.
+
+        A job from another tab has no document behind it, so addressing one
+        through a split route is as unknown as a job that never existed.
+        """
+        job = _job_or_404(job_id)
+        if "source" not in job.meta:
+            abort(404, description="Unknown job")
+        # Editing a document is minutes of looking at pages, which writes
+        # nothing; without this the TTL sweep takes the session mid-edit.
+        job.touch()
+        return job
+
+    def _page_or_404(job, number: int) -> int:
+        count = job.meta["page_count"]
+        if number < 1 or number > count:
+            abort(404, description="Page {0} is not in a {1}-page document".format(number, count))
+        return number
+
+    @application.route("/api/split/<job_id>/pages/<int:number>.png")
+    def split_page_preview(job_id, number):
+        job = _split_job_or_404(job_id)
+        _page_or_404(job, number)
+        cached = job.previews / "pages" / "{0}.png".format(number)
+        if not cached.exists():
+            try:
+                data = preview.pdf_thumbnail_png(job.meta["source"], page=number)
+            except ToolError as exc:
+                abort(500, description=_redact(str(exc), (job.meta["source"], job.meta["name"])))
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            cached.write_bytes(data)
+        response = send_file(str(cached), mimetype="image/png")
+        # Unlike /api/thumbnail, this URL names one page of one job, and that
+        # page cannot change. The grid is rebuilt on every reorder, so without
+        # a cacheable answer each arrow press would refetch every thumbnail.
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
+
+    @application.route("/api/split/<job_id>/pages/<int:number>.pdf")
+    def split_page_download(job_id, number):
+        job = _split_job_or_404(job_id)
+        _page_or_404(job, number)
+        rotation = _requested_rotation_argument()
+        # Built into a temporary directory rather than into the job: this is
+        # one page on its way out of the door, not a result to keep, and two
+        # clicks on the same page at different angles must not race over one
+        # file.
+        with tempfile.TemporaryDirectory(prefix="split-page-") as directory:
+            target = Path(directory) / "page.pdf"
+            try:
+                split.build_document(job.meta["source"], target, [number - 1], [rotation])
+            except (ToolError, ValueError, OSError) as exc:
+                abort(400, description=_redact(str(exc), (job.meta["source"], job.meta["name"])))
+            data = target.read_bytes()
+        return send_file(
+            io.BytesIO(data),
+            as_attachment=True,
+            download_name=_page_file_name(job.meta["name"], number),
+            mimetype="application/pdf",
+        )
+
+    @application.route("/api/split/<job_id>/build", methods=["POST"])
+    def api_split_build(job_id):
+        job = _split_job_or_404(job_id)
+        order = _requested_page_numbers(job)
+        rotations = _requested_rotations(len(order))
+        normalize = request.form.get("normalize") == "1"
+        output_name = validate.normalize_output_name(
+            request.form.get("output_name", "") or job.meta["name"], "split.pdf"
+        )
+        destination = job.outputs / output_name
+        try:
+            split.build_document(job.meta["source"], destination, order, rotations, normalize_pages=normalize)
+        except (ToolError, ValueError, OSError) as exc:
+            message = _redact(str(exc), (job.meta["source"], job.meta["name"]))
+            return jsonify(
+                {
+                    "job_id": job.id,
+                    "results": [_failure(output_name, message, getattr(exc, "stderr", ""))],
+                    "zip_url": None,
+                }
+            )
+        index = job.add_output(destination, output_name)
+        # Remembered so the per-page zip below can be built on demand: paying
+        # for it up front would cost a second copy of the whole document for
+        # everyone who only wanted the one file.
+        job.meta["selection"] = {"order": order, "rotations": rotations}
+        return jsonify(
+            {
+                "job_id": job.id,
+                "results": [_plain_success(job, index, output_name, destination)],
+                "zip_url": "/api/split/{0}/pages.zip".format(job.id),
+            }
+        )
+
+    @application.route("/api/split/<job_id>/pages.zip")
+    def split_pages_zip(job_id):
+        job = _split_job_or_404(job_id)
+        selection = job.meta.get("selection")
+        if not selection:
+            abort(404, description="Nothing has been built for this job yet")
+        directory = job.root / "pages"
+        try:
+            written = split.build_pages(job.meta["source"], directory, selection["order"], selection["rotations"])
+        except (ToolError, ValueError, OSError) as exc:
+            abort(500, description=_redact(str(exc), (job.meta["source"], job.meta["name"])))
+        archive = jobs.zip_files(
+            job.root / "pages.zip",
+            [(_page_file_name(job.meta["name"], index + 1), path) for index, path in zip(selection["order"], written)],
+        )
+        return send_file(
+            str(archive),
+            as_attachment=True,
+            download_name=_pages_zip_name(job.meta["name"]),
+            mimetype="application/zip",
+        )
 
     def _job_or_404(job_id: str):
         try:
