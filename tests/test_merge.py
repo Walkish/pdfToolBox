@@ -7,6 +7,7 @@ from PIL import Image, ImageOps
 from pypdf import PdfReader
 
 from pdftools import compress, merge, pagesize
+from pdftools.errors import ToolError
 
 
 def extracted_text(pdf_path):
@@ -156,3 +157,17 @@ def test_a_smaller_page_is_scaled_up_with_its_proportions_intact(box_pdf_factory
     assert (bottom - top) == pytest.approx(633.6, abs=2)
     assert left == pytest.approx(61.2, abs=2)
     assert top == pytest.approx(79.2, abs=2)
+
+
+def test_an_owner_locked_input_still_merges(owner_locked_pdf, vector_pdf_factory, tmp_path):
+    """Locked against editing but readable without a password: a bank
+    statement merges like any other file."""
+    output = merge.merge_pdfs([owner_locked_pdf, vector_pdf_factory(["PLAIN"])], tmp_path / "merged.pdf")
+    assert page_count(output) == 2
+
+
+def test_a_password_protected_input_is_refused_by_name(password_protected_pdf, tmp_path):
+    with pytest.raises(ToolError) as excinfo:
+        merge.merge_pdfs([password_protected_pdf], tmp_path / "merged.pdf")
+    assert password_protected_pdf.name in str(excinfo.value)
+    assert "password protected" in str(excinfo.value)
