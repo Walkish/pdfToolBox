@@ -6,13 +6,14 @@ every new job sweeps expired ones, which is enough for a local single-user tool
 and avoids a background thread.
 """
 
+import os
 import shutil
 import tempfile
 import time
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 DEFAULT_TTL_SECONDS = 3600
 _BASE_PREFIX = "pdftoolbox-"
@@ -35,6 +36,31 @@ def safe_display_name(display_name: str) -> str:
     return candidate
 
 
+def zip_files(archive, members: List[Tuple[str, Path]]) -> Path:
+    """Zip ``members``, given as (display name, path) pairs, into ``archive``.
+
+    Display names are untrusted -- they echo what a client called an upload --
+    so each is reduced to a bare filename, and names that collide once reduced
+    are made distinct rather than overwriting one another. A zip whose second
+    member silently replaced the first would lose a page the user asked for.
+    """
+    archive = Path(archive)
+    used = set()
+    with zipfile.ZipFile(str(archive), "w", zipfile.ZIP_DEFLATED) as zipped:
+        for display_name, path in members:
+            name = safe_display_name(display_name)
+            if name in used:
+                stem = Path(name).stem
+                suffix = Path(name).suffix
+                counter = 2
+                while "{0}_{1}{2}".format(stem, counter, suffix) in used:
+                    counter += 1
+                name = "{0}_{1}{2}".format(stem, counter, suffix)
+            used.add(name)
+            zipped.write(str(path), arcname=name)
+    return archive
+
+
 class Job:
     """One request's inputs, outputs, and previews."""
 
@@ -47,6 +73,21 @@ class Job:
         for directory in (self.inputs, self.outputs, self.previews):
             directory.mkdir(parents=True, exist_ok=True)
         self._outputs: List[Dict] = []
+        # Scratch space for whichever route owns this job, the way each
+        # output already carries its own meta. The splitter keeps the
+        # uploaded document and the page selection here, because its work
+        # spans several requests rather than one.
+        self.meta: Dict = {}
+
+    def touch(self) -> None:
+        """Mark the job as still in use, so the TTL sweep spares it.
+
+        Expiry is measured from the directory's mtime, which only moves when
+        something is written. A job whose pages are merely being looked at
+        writes nothing, so a long editing session would age into a sweep and
+        take the user's document with it mid-edit.
+        """
+        os.utime(str(self.root), None)
 
     def add_output(self, path, display_name: str, meta: Optional[Dict] = None) -> int:
         """Register a finished file and return its index."""
@@ -68,21 +109,10 @@ class Job:
         return list(self._outputs)
 
     def zip_outputs(self) -> Path:
-        archive = self.root / "results.zip"
-        used = set()
-        with zipfile.ZipFile(str(archive), "w", zipfile.ZIP_DEFLATED) as zipped:
-            for entry in self._outputs:
-                name = safe_display_name(entry["display_name"])
-                if name in used:
-                    stem = Path(name).stem
-                    suffix = Path(name).suffix
-                    counter = 2
-                    while "{0}_{1}{2}".format(stem, counter, suffix) in used:
-                        counter += 1
-                    name = "{0}_{1}{2}".format(stem, counter, suffix)
-                used.add(name)
-                zipped.write(str(entry["path"]), arcname=name)
-        return archive
+        return zip_files(
+            self.root / "results.zip",
+            [(entry["display_name"], entry["path"]) for entry in self._outputs],
+        )
 
 
 class JobStore:
