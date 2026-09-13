@@ -59,15 +59,17 @@ THUMBNAIL_MAX_EDGE = 320
 THUMBNAIL_DPI = 50
 
 
-def pdf_thumbnail_png(pdf_path, max_edge: int = THUMBNAIL_MAX_EDGE) -> bytes:
-    """PNG bytes of a small preview of the PDF's first page.
+def pdf_thumbnail_png(pdf_path, max_edge: int = THUMBNAIL_MAX_EDGE, page: int = 1) -> bytes:
+    """PNG bytes of a small preview of one page, the first by default.
 
     The merge tab lists PDFs, and a filename alone does not tell two scans
-    apart. Rendered through the same pdftoppm this module already uses for the
-    before/after comparison.
+    apart; the split tab shows every page of one document, which is the same
+    preview asked for a different page. Rendered through the same pdftoppm
+    this module already uses for the before/after comparison, so a page
+    number past the end fails the way every other render does.
     """
     with tempfile.TemporaryDirectory(prefix="pdf-thumb-") as directory:
-        rendered = render_page(pdf_path, 1, THUMBNAIL_DPI, Path(directory) / "page")
+        rendered = render_page(pdf_path, page, THUMBNAIL_DPI, Path(directory) / "page")
         with Image.open(str(rendered)) as image:
             image.load()
             preview_image = image.convert("RGB")

@@ -168,3 +168,54 @@ def test_cleanup_survives_its_base_directory_being_swept_away(tmp_path):
     # And the store is still usable afterwards.
     job = store.create()
     assert job.inputs.is_dir()
+
+
+def test_touching_a_job_saves_it_from_the_sweep(tmp_path):
+    """A split session outlives the request that made it: the document stays
+    on disk while the user works through its pages. Without a way to say "this
+    one is still in use", an hour of editing ends in a 404 on the job's own
+    directory."""
+    store = jobs.JobStore(base_dir=tmp_path, ttl_seconds=60)
+    job = store.create()
+    old = time.time() - 3600
+    os.utime(str(job.root), (old, old))
+    job.touch()
+    assert store.cleanup_expired() == 0
+    assert job.root.exists()
+    assert store.get(job.id) is job
+
+
+def test_a_new_job_carries_an_empty_note(tmp_path):
+    """Somewhere for the route that owns a job to remember what it is working
+    on between requests, the way each output already carries its own meta."""
+    store = jobs.JobStore(base_dir=tmp_path, ttl_seconds=60)
+    assert store.create().meta == {}
+
+
+def test_zip_files_packs_each_file_under_the_name_it_was_given(tmp_path):
+    first = tmp_path / "a.pdf"
+    first.write_bytes(b"first")
+    second = tmp_path / "b.pdf"
+    second.write_bytes(b"second")
+    archive = jobs.zip_files(tmp_path / "out.zip", [("one.pdf", first), ("two.pdf", second)])
+    with zipfile.ZipFile(str(archive)) as zipped:
+        assert sorted(zipped.namelist()) == ["one.pdf", "two.pdf"]
+        assert zipped.read("two.pdf") == b"second"
+
+
+def test_zip_files_keeps_repeated_names_apart(tmp_path):
+    first = tmp_path / "a.pdf"
+    first.write_bytes(b"first")
+    second = tmp_path / "b.pdf"
+    second.write_bytes(b"second")
+    archive = jobs.zip_files(tmp_path / "out.zip", [("same.pdf", first), ("same.pdf", second)])
+    with zipfile.ZipFile(str(archive)) as zipped:
+        assert sorted(zipped.namelist()) == ["same.pdf", "same_2.pdf"]
+
+
+def test_zip_files_refuses_a_name_that_climbs_out_of_the_archive(tmp_path):
+    source = tmp_path / "a.pdf"
+    source.write_bytes(b"payload")
+    archive = jobs.zip_files(tmp_path / "out.zip", [("../../etc/passwd", source)])
+    with zipfile.ZipFile(str(archive)) as zipped:
+        assert zipped.namelist() == ["passwd"]

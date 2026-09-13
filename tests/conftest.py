@@ -544,3 +544,31 @@ def heic_rotated(tmp_path):
     exif[274] = 6
     image.save(str(path), exif=exif.tobytes(), quality=90)
     return path
+
+
+def _encrypted_pdf(source, path, user_password):
+    """Re-write ``source`` encrypted, with ``user_password`` to open it."""
+    writer = PdfWriter()
+    for page in PdfReader(str(source)).pages:
+        writer.add_page(page)
+    writer.encrypt(user_password=user_password, owner_password="owner-secret")
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+@pytest.fixture
+def owner_locked_pdf(vector_pdf_factory, tmp_path):
+    """Encrypted, but with an empty user password.
+
+    This is what a bank statement or a scanner's output usually is: it opens
+    in any viewer without being asked for anything, and is merely locked
+    against editing. It must not be refused as password protected.
+    """
+    return _encrypted_pdf(vector_pdf_factory(["LOCKED"]), tmp_path / "owner_locked.pdf", "")
+
+
+@pytest.fixture
+def password_protected_pdf(vector_pdf_factory, tmp_path):
+    """Encrypted with a real user password, which this tool never has."""
+    return _encrypted_pdf(vector_pdf_factory(["SECRET"]), tmp_path / "protected.pdf", "letmein")

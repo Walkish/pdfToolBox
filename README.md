@@ -1,7 +1,8 @@
 # PDF Toolbox
 
-A localhost web tool for three PDF chores: compressing PDFs without making them
-unprintable, merging PDFs, and turning images into a PDF.
+A localhost web tool for four PDF chores: compressing PDFs without making them
+unprintable, merging PDFs, turning images into a PDF, and taking one document
+apart page by page.
 
 Images can be PNG, JPEG, WebP or HEIC — the format an iPhone shoots by default.
 One image becomes one page, sized from the image itself. Each row shows a
@@ -25,6 +26,7 @@ written, so nothing is re-encoded in the browser first.
 - [Running on Windows](#running-on-windows)
 - [Compression levels](#compression-levels)
 - [Matching page sizes when merging](#matching-page-sizes-when-merging)
+- [Splitting a document](#splitting-a-document)
 - [Known limitations](#known-limitations)
 - [Tests](#tests)
 - [Lint and type checks](#lint-and-type-checks)
@@ -251,6 +253,37 @@ matching page sizes costs no quality.
 Untick the box for documents where the geometry is the point — drawings to
 scale, forms — and you get the plain page-for-page merge.
 
+## Splitting a document
+
+The **Split** tab opens one PDF and shows every page as a tile. Drop the pages
+you do not want, move the rest with the arrows, turn a sideways scan a quarter
+at a time, and take the result either as one document or as one file per page.
+
+The document is uploaded once and stays on the server for the session; what
+travels afterwards is a page order, not the file. Page previews are rendered on
+demand as you scroll, so a two-hundred-page document does not make you wait for
+two hundred renders before showing you anything. Each tile's ⤓ button
+downloads that page on its own and works immediately — it does not wait for
+**Build PDF**. After building, **Download all pages (.zip)** gives one
+single-page PDF per remaining page, named after the page's number in the
+original document.
+
+Pages are copied, never re-rendered: dropping, reordering and turning a page all
+cost nothing in quality, and a turn is a `/Rotate` entry rather than a new image.
+A page that arrives already turned is turned further rather than straightened.
+
+**Match page sizes** works as it does in the merge tab, and is off by default
+because the pages of one document are usually already uniform. Note that it and
+the turn buttons pull against each other: fitting turns content to match the
+target's orientation, so turning one page of an otherwise portrait document and
+matching sizes in the same build turns that page straight back. Turn pages to
+straighten a sideways scan — that needs no size matching — or match sizes, but
+do not expect a deliberately sideways page to survive both.
+
+A session lasts an hour from the last time you touch it. Looking at pages counts
+as touching it, so the clock does not run out while you work; leave the tab for
+longer than that and the tab says the document is no longer open.
+
 ## Known limitations
 
 - Digital signatures do not survive compression: Ghostscript writes a new file.
@@ -267,7 +300,12 @@ scale, forms — and you get the plain page-for-page merge.
 - A burst or Live Photo contributes its primary image only, so one HEIC file is
   always one page.
 - Rotations are lost if the page is reloaded before the PDF is built, as is the
-  file list itself.
+  file list itself. The same is true of a split session: reloading loses the
+  page order, and the document has to be opened again.
+- Splitting works on one document at a time. To take pages from several files,
+  merge them first and split the result.
+- A dropped page cannot be undone one step at a time; **Reset** brings the whole
+  document back as it was uploaded.
 - The thumbnail is a preview, not a proof: it is rendered small, so it shows
   orientation and framing rather than fine detail.
 

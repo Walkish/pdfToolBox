@@ -105,3 +105,25 @@ pre { overflow-x: auto; font-size: 12px; background: #f2f3f5; padding: 8px; bord
 .pair figure { margin: 0; }
 .pair img { display: block; border: 1px solid var(--line); }
 .pair figcaption { font-size: 12px; color: var(--muted); text-align: center; padding-top: 4px; }
+
+/* The split tab's page grid. A tile is a fixed square: a preview turned a
+   quarter is still the same box, so the grid does not reflow every time a
+   page is turned, and a portrait page rotated to landscape stays inside its
+   own tile rather than overlapping its neighbour. */
+.pagegrid { list-style: none; margin: 14px 0; padding: 0;
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 12px; }
+.page { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+        padding: 10px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.pthumb { width: 100%; height: 150px; display: flex; align-items: center; justify-content: center; }
+.pthumb img { max-width: 150px; max-height: 150px; object-fit: contain;
+              border: 1px solid var(--line); background: var(--bg);
+              transition: transform .15s ease; }
+.pthumb img.is-empty { visibility: hidden; }
+.pnum { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pbuttons { display: flex; gap: 4px; }
+/* The per-page download is a link, not a button, so it needs the button's
+   look and the same centring a button gets for free. */
+a.icon { display: inline-flex; align-items: center; justify-content: center;
+         text-decoration: none; font-size: 13px; }
+
+.note { margin: 10px 0 0; font-size: 13px; color: var(--muted); }

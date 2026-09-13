@@ -8,11 +8,9 @@ the ordering decision and this module never re-sorts.
 from pathlib import Path
 from typing import List
 
-from pypdf import PdfReader, PdfWriter
-from pypdf.errors import PdfReadError
+from pypdf import PdfWriter
 
-from . import pagesize
-from .errors import ToolError
+from . import pagesize, reader
 
 
 def merge_pdfs(paths: List[Path], dst, normalize_pages: bool = False) -> Path:
@@ -29,20 +27,11 @@ def merge_pdfs(paths: List[Path], dst, normalize_pages: bool = False) -> Path:
     dst = Path(dst)
     writer = PdfWriter()
     for path in paths:
-        path = Path(path)
-        try:
-            reader = PdfReader(str(path))
-            if reader.is_encrypted:
-                # An empty user password covers the common "owner-locked but
-                # readable" case; anything else needs a password we do not have.
-                if reader.decrypt("") == 0:
-                    raise ToolError("{0} is password protected and cannot be merged".format(path.name))
-            for page in reader.pages:
-                writer.add_page(page)
-        except ToolError:
-            raise
-        except (PdfReadError, OSError, ValueError) as exc:
-            raise ToolError("Could not read {0}: {1}".format(path.name, exc)) from exc
+        # Opening, decrypting and reporting an unreadable file is shared with
+        # the splitter, which asks the same three questions of the same kind
+        # of untrusted upload.
+        for page in reader.read_pages(Path(path)):
+            writer.add_page(page)
     if normalize_pages:
         # Measured across the whole batch, so this cannot run until every input
         # has been read.

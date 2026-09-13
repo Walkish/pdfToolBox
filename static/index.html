@@ -12,6 +12,7 @@
   <button class="tab is-active" data-tab="compress" role="tab">Compress</button>
   <button class="tab" data-tab="merge" role="tab">Merge</button>
   <button class="tab" data-tab="images" role="tab">Images to PDF</button>
+  <button class="tab" data-tab="split" role="tab">Split</button>
 </nav>
 
 <section class="panel is-active" id="panel-compress">
@@ -73,4 +74,22 @@
   <ul class="results" id="images-results"></ul>
 </section>
 
+<section class="panel" id="panel-split">
+  <div class="drop" data-drop="split">
+    <input type="file" id="split-input" accept="application/pdf" hidden>
+    <p>Drop a PDF here or <button class="link" data-pick="split-input">choose a file</button></p>
+  </div>
+  <p class="hint">Every page is shown. Drop the ones you do not want, move the rest into order with the arrows, then take a page on its own or the whole document.</p>
+  <p class="note" id="split-status" hidden></p>
+  <ul class="pagegrid" id="split-pages"></ul>
+  <label class="check"><input type="checkbox" id="split-normalize"> Match page sizes</label>
+  <div class="actions">
+    <button class="primary" id="split-run" disabled>Build PDF</button>
+    <button id="split-reset" hidden>Reset</button>
+    <a class="zip" id="split-zip" hidden>Download all pages (.zip)</a>
+  </div>
+  <ul class="results" id="split-results"></ul>
+</section>
+
 <script src="/static/app.js"></script>
+<script src="/static/split.js"></script>
