@@ -7,11 +7,15 @@
    a list of files, so it does not fit the shape run() below expects. It uses
    byId, humanSize, wireDropZone and resultRow from here. */
 
+/* `busy` is true while the tab's request is in flight. Every re-render
+   recomputes the run button, and a thumbnail arriving or an arrow press
+   mid-request would otherwise re-enable it -- a second click then sends the
+   batch twice and leaves the button reading "Working…" for good. */
 var TABS = {
-  compress: { files: [], endpoint: "/api/compress", multiResult: true },
-  merge: { files: [], endpoint: "/api/merge", multiResult: false },
-  images: { files: [], endpoint: "/api/images", multiResult: false },
-  pagephoto: { files: [], endpoint: "/api/pagephoto", multiResult: true }
+  compress: { files: [], endpoint: "/api/compress", busy: false },
+  merge: { files: [], endpoint: "/api/merge", busy: false },
+  images: { files: [], endpoint: "/api/images", busy: false },
+  pagephoto: { files: [], endpoint: "/api/pagephoto", busy: false }
 };
 
 /* Rotation and preview live in maps keyed by the File object itself, not in
@@ -35,7 +39,7 @@ function pagePhotoStepChosen() {
 }
 
 function canRun(tabName) {
-  if (TABS[tabName].files.length === 0) { return false; }
+  if (TABS[tabName].busy || TABS[tabName].files.length === 0) { return false; }
   return tabName !== "pagephoto" || pagePhotoStepChosen();
 }
 
@@ -198,12 +202,15 @@ function loadThumbnail(tabName, file) {
     if (!response.ok) { throw new Error("no preview"); }
     return response.blob();
   }).then(function (blob) {
+    // The file may have been removed while its preview was rendering; an
+    // object URL made for it now would never be revoked.
+    if (TABS[tabName].files.indexOf(file) === -1) { return; }
     THUMBNAILS.set(file, URL.createObjectURL(blob));
     renderFileList(tabName);
   }).catch(function () {
     // A preview that will not render is not a reason to block the build; the
     // real error arrives when the PDF is built.
-    THUMBNAILS.set(file, null);
+    if (TABS[tabName].files.indexOf(file) !== -1) { THUMBNAILS.set(file, null); }
   });
 }
 
@@ -244,6 +251,10 @@ function resultRow(result) {
 
     var link = document.createElement("a");
     link.href = result.download_url;
+    // A download, not a navigation: once the job has expired the URL answers
+    // a JSON 404, and following it would replace the whole page -- every
+    // tab's file list with it -- with that error.
+    link.download = "";
     link.textContent = "Download";
     link.className = "download";
     head.appendChild(link);
@@ -352,6 +363,7 @@ function run(tabName) {
   var button = byId(tabName + "-run");
   var results = byId(tabName + "-results");
   var zipLink = byId(tabName + "-zip");
+  state.busy = true;
   button.disabled = true;
   var originalLabel = button.textContent;
   button.textContent = "Working…";
@@ -395,7 +407,10 @@ function run(tabName) {
     payload.results.forEach(function (result) {
       results.appendChild(resultRow(result));
     });
-    if (zipLink && payload.zip_url && payload.results.length > 1) {
+    // Counted over the files actually written: a batch of two where one
+    // failed produces one file, and a zip of one file is just a detour.
+    var written = payload.results.filter(function (result) { return result.ok; }).length;
+    if (zipLink && payload.zip_url && written > 1) {
       zipLink.href = payload.zip_url;
       zipLink.hidden = false;
     }
@@ -405,6 +420,7 @@ function run(tabName) {
     item.textContent = error.message;
     results.appendChild(item);
   }).then(function () {
+    state.busy = false;
     button.textContent = originalLabel;
     button.disabled = !canRun(tabName);
   });
@@ -431,6 +447,10 @@ function run(tabName) {
     byId(tabName + "-run").addEventListener("click", function () { run(tabName); });
   });
 
+  // Also set once now: a browser restoring form state on reload or from the
+  // back/forward cache checks the box without firing change, which would
+  // compress with a preset the user cannot see.
+  byId("merge-presets").hidden = !byId("merge-compress").checked;
   byId("merge-compress").addEventListener("change", function (event) {
     byId("merge-presets").hidden = !event.currentTarget.checked;
   });

@@ -5,7 +5,7 @@ import subprocess
 import pytest
 
 from pdftools import compress
-from pdftools.inspect import PdfProfile, parse_pdfimages_list, profile_pdf
+from pdftools.inspect import PdfProfile, parse_pdfimages_list
 
 
 def image_ppi_values(pdf_path):
@@ -35,9 +35,8 @@ def test_every_preset_is_registered_under_its_own_id():
         assert preset.id == preset_id
     assert set(compress.PRESETS) == {"print600", "print300", "lossless"}
     assert compress.DEFAULT_PRESET == "print300"
-    # Every level is print-safe now: the lowest target is 300 dpi, well above
-    # the floor, so no preset can render a document unprintable.
-    assert all(preset.print_safe for preset in compress.PRESETS.values())
+    # Every level is print-safe: the lowest target is 300 dpi, well above the
+    # floor, so no preset can render a document unprintable.
     assert (
         min(preset.image_dpi for preset in compress.PRESETS.values() if preset.image_dpi is not None)
         > compress.PRINT_DPI_FLOOR
@@ -249,12 +248,7 @@ def test_returned_original_path_reports_no_resampling_and_no_stale_floor_warning
     guaranteed to trigger for real, via a real subprocess run.
     """
     high_res_scan = PdfProfile(
-        page_count=1,
         images=[],
-        has_text=True,
-        is_scan=True,
-        min_ppi=1000,
-        median_ppi=1000,
         max_ppi=1000,
     )
     result = compress.compress_pdf(tiny_pdf, tmp_path / "out.pdf", "print300", profile=high_res_scan)
@@ -288,12 +282,7 @@ def test_a_corrupt_pdf_raises_with_ghostscript_stderr(tmp_path):
     broken = tmp_path / "broken.pdf"
     broken.write_bytes(b"this is not a pdf file at all, no header, just junk bytes")
     dummy_profile = PdfProfile(
-        page_count=1,
         images=[],
-        has_text=True,
-        is_scan=False,
-        min_ppi=None,
-        median_ppi=None,
         max_ppi=None,
     )
     with pytest.raises(compress.ToolError) as excinfo:
@@ -381,16 +370,13 @@ def test_one_low_res_scan_page_in_a_text_bundle_is_still_reported(text_bundle_wi
     """A mostly-text document is not a "scan", but its one scanned page still
     prints at 100 dpi.
 
-    Document-level scan detection cannot see this: one scan page in five
-    leaves ``is_scan`` False. The floor check must answer to the measured
-    worst page instead, because that is the page the reader meets. Claiming
+    Document-level scan detection could not see this: one scan page in five
+    is not a scanned document. The floor check answers to the measured worst
+    page instead, because that is the page the reader meets. Claiming
     ``below_print_floor is False`` here would be an explicit false statement
     about print safety, which is worse than the silence it replaced.
     """
     destination = tmp_path / "out.pdf"
-    source_profile = profile_pdf(text_bundle_with_one_low_res_scan_page)
-    assert source_profile.is_scan is False, "fixture must not read as a whole-doc scan"
-
     result = compress.compress_pdf(text_bundle_with_one_low_res_scan_page, destination, "print300")
 
     assert min(image_ppi_values(destination)) <= 110

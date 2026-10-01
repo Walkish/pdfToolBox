@@ -11,9 +11,30 @@ from pathlib import Path
 from typing import List
 
 from pypdf import PageObject, PdfReader
-from pypdf.errors import PdfReadError
+from pypdf.errors import DependencyError, PyPdfError
 
 from .errors import ToolError
+
+# What pypdf raises on a damaged or unsupported file. Its own errors cover
+# most of it, but a broken page tree surfaces as plain AttributeError /
+# TypeError / KeyError from deep inside the parser, and an AES-256 file needs
+# a crypto package that is not installed (DependencyError, which is not a
+# PyPdfError). Measured by fuzzing: 1 in 25 byte-flipped PDFs raised one of
+# the non-pypdf types. Objects are resolved lazily, so these can also come
+# out of a later ``add_page`` or ``write`` -- callers that copy pages wrap
+# those in the same tuple.
+PDF_FAILURES = (
+    PyPdfError,
+    DependencyError,
+    OSError,
+    ValueError,
+    AttributeError,
+    TypeError,
+    KeyError,
+    IndexError,
+    RecursionError,
+    ZeroDivisionError,
+)
 
 
 def read_pages(path) -> List[PageObject]:
@@ -39,5 +60,5 @@ def read_pages(path) -> List[PageObject]:
         return list(reader.pages)
     except ToolError:
         raise
-    except (PdfReadError, OSError, ValueError) as exc:
+    except PDF_FAILURES as exc:
         raise ToolError("Could not read {0}: {1}".format(path.name, exc)) from exc

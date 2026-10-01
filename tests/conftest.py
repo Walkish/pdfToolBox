@@ -146,7 +146,7 @@ def text_bundle_with_one_low_res_scan_page(tmp_path):
     """Four vector text pages plus one full-page 100 dpi scanned page.
 
     This is the shape that document-level scan detection cannot see: only one
-    page in five is a scan page, so ``is_scan`` is False, yet that page will
+    page in five is a scan page, so the document is not a scan, yet that page will
     print at 100 dpi -- half the print floor. A reader meets the worst page,
     not the document average.
     """
@@ -430,29 +430,6 @@ def ocr_scan_pdf(tmp_path):
     writer.pages[0].merge_page(text_page)
 
     path = tmp_path / "ocr_scan.pdf"
-    with open(path, "wb") as handle:
-        writer.write(handle)
-    return path
-
-
-@pytest.fixture
-def mixed_scan_and_text_pdf(tmp_path):
-    """Two ordinary text pages followed by one full-page scanned image page.
-
-    Mostly a text document, with one page that is a genuine scan -- this
-    exercises the "most pages must be scan pages" fraction rather than a
-    "does any page look like a scan" check.
-    """
-    text_path = _vector_pdf(tmp_path / "_mixed_text.pdf", ["MARKER-1", "MARKER-2"], page_size=_OCR_PAGE_SIZE)
-    image = _render_text_page(5 * 300, 7 * 300, mode="L")
-    image_path = _save_image_pdf(image, tmp_path / "_mixed_image.pdf", 300)
-
-    writer = PdfWriter()
-    for page in PdfReader(str(text_path)).pages:
-        writer.add_page(page)
-    writer.add_page(PdfReader(str(image_path)).pages[0])
-
-    path = tmp_path / "mixed.pdf"
     with open(path, "wb") as handle:
         writer.write(handle)
     return path

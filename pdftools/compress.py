@@ -32,12 +32,9 @@ class Preset:
     """A compression level. ``image_dpi is None`` means no resampling at all."""
 
     id: str
-    label: str
     image_dpi: Optional[int]
     mono_dpi: Optional[int]
     qfactor: Optional[float]
-    chroma_samples: str
-    print_safe: bool
 
 
 # Every level here is print-safe: the lowest target is 300 dpi, comfortably
@@ -48,8 +45,7 @@ class Preset:
 # QFactor is the JPEG quality Ghostscript applies through setdistillerparams;
 # lower is better. Both print presets use 0.15, so they differ in resolution
 # rather than in quality — a 600 dpi output is then strictly better than a
-# 300 dpi one, never a different trade. Chroma subsampling stays off, because
-# subsampling is what smears coloured text edges.
+# 300 dpi one, never a different trade.
 #
 # Measured against Ghostscript 10.7 (see tests/test_compress.py):
 #   1200 dpi scan  → print600 resamples to 600 dpi, -42%
@@ -58,10 +54,14 @@ class Preset:
 #                        rewrite comes out slightly larger and the original is
 #                        returned. No generation loss on an already-JPEG scan.
 PRESETS: Dict[str, Preset] = {
-    "print600": Preset("print600", "Print 600 dpi", 600, 1200, 0.15, "[1 1 1 1]", True),
-    "print300": Preset("print300", "Print 300 dpi", 300, 600, 0.15, "[1 1 1 1]", True),
-    "lossless": Preset("lossless", "Lossless", None, None, None, "[1 1 1 1]", True),
+    "print600": Preset("print600", 600, 1200, 0.15),
+    "print300": Preset("print300", 300, 600, 0.15),
+    "lossless": Preset("lossless", None, None, None),
 }
+
+# Chroma subsampling stays off for every preset, because subsampling is what
+# smears coloured text edges.
+_CHROMA_SAMPLES = "[1 1 1 1]"
 
 DEFAULT_PRESET = "print300"
 
@@ -93,7 +93,6 @@ class CompressResult:
     preset_id: str
     resampled: bool
     returned_original: bool
-    source_ppi: Optional[float]
     # True when the *finished* file's own scan pages measure below
     # PRINT_DPI_FLOOR. The machine-readable form of the warning below, so a
     # UI can flag the print risk without parsing English prose.
@@ -101,14 +100,10 @@ class CompressResult:
     warnings: List[str]
 
     @property
-    def saved_bytes(self) -> int:
-        return self.size_before - self.size_after
-
-    @property
     def saved_ratio(self) -> float:
         if self.size_before == 0:
             return 0.0
-        return self.saved_bytes / float(self.size_before)
+        return (self.size_before - self.size_after) / float(self.size_before)
 
 
 def _resample_args(preset: Preset) -> List[str]:
@@ -164,7 +159,7 @@ def _lossless_args() -> List[str]:
 def _distiller_snippet(preset: Preset) -> str:
     """JPEG quality for pdfwrite goes through setdistillerparams; the
     -dJPEGQ switch is not reliably honoured by this device."""
-    image_dict = "<< /QFactor {0} /Blend 1 /HSamples {1} /VSamples {1} >>".format(preset.qfactor, preset.chroma_samples)
+    image_dict = "<< /QFactor {0} /Blend 1 /HSamples {1} /VSamples {1} >>".format(preset.qfactor, _CHROMA_SAMPLES)
     return "<< /ColorImageDict {0} /GrayImageDict {0} >> setdistillerparams".format(image_dict)
 
 
@@ -267,8 +262,9 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
         completed = subprocess.run(
             command,
             capture_output=True,
-            text=True,
             timeout=binaries.TIMEOUT_SECONDS,
+            encoding=binaries.OUTPUT_ENCODING,
+            errors="replace",
         )
     except subprocess.TimeoutExpired as exc:
         raise ToolError(
@@ -310,12 +306,11 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
     # target, that one number describes every page -- is exactly what has
     # gone wrong here before: a two-page bundle at 600 and 100 dpi through
     # print300 leaves page 2 at 100 dpi, which no preset-derived number sees.
-    # Deliberately not gated on ``source.is_scan``. scan_floor_ppi already
-    # applies the page-covering-image test per page, which is what the
-    # document-level flag was ever a proxy for -- and the flag needs 80% of
-    # pages to qualify, so a mostly-text bundle carrying one 100 dpi scanned
-    # sheet would report False. Saying "not below the floor" about a page that
-    # will print at 100 dpi is a false claim, worse than saying nothing.
+    # Per page, not per document: scan_floor_ppi applies the page-covering-
+    # image test to every page, so a mostly-text bundle carrying one 100 dpi
+    # scanned sheet is still caught. Saying "not below the floor" about a
+    # page that will print at 100 dpi is a false claim, worse than saying
+    # nothing.
     output_floor_ppi = scan_floor_ppi(dst)
     below_print_floor = output_floor_ppi is not None and output_floor_ppi < PRINT_DPI_FLOOR
     if below_print_floor:
@@ -328,7 +323,6 @@ def compress_pdf(src, dst, preset_id: str = DEFAULT_PRESET, profile: Optional[Pd
         preset_id=preset_id,
         resampled=resample,
         returned_original=returned_original,
-        source_ppi=source.median_ppi,
         below_print_floor=below_print_floor,
         warnings=warnings,
     )

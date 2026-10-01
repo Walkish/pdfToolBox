@@ -70,7 +70,7 @@ def test_find_falls_back_to_the_windows_executable_name(monkeypatch):
 def test_the_poppler_tools_are_looked_up_under_their_own_names():
     """Unlike Ghostscript, poppler keeps its executable names on every platform;
     Windows resolves the .exe through PATHEXT."""
-    for name in ("pdfimages", "pdftoppm", "pdftotext", "pdfinfo"):
+    for name in ("pdfimages", "pdftoppm", "pdfinfo"):
         assert binaries.executable_names(name) == [name]
 
 

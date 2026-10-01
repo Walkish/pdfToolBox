@@ -108,9 +108,18 @@ class Job:
     def outputs_list(self) -> List[Dict]:
         return list(self._outputs)
 
+    def new_zip_path(self) -> Path:
+        """A fresh path for one archive request.
+
+        Never a fixed name: two requests at once (a double-click, on a
+        threaded server) would have one truncate the archive while the other
+        is still sending it.
+        """
+        return self.root / "archive-{0}.zip".format(uuid.uuid4().hex)
+
     def zip_outputs(self) -> Path:
         return zip_files(
-            self.root / "results.zip",
+            self.new_zip_path(),
             [(entry["display_name"], entry["path"]) for entry in self._outputs],
         )
 
@@ -135,6 +144,11 @@ class JobStore:
 
     def get(self, job_id: str) -> Job:
         return self._jobs[job_id]
+
+    def discard(self, job: Job) -> None:
+        """Forget ``job`` and delete its directory now, not at expiry."""
+        self._jobs.pop(job.id, None)
+        shutil.rmtree(str(job.root), ignore_errors=True)
 
     def cleanup_expired(self) -> int:
         """Delete directories older than the TTL: tracked jobs and orphans alike.

@@ -98,7 +98,13 @@ def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:
         str(out_prefix),
     ]
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            timeout=binaries.TIMEOUT_SECONDS,
+            encoding=binaries.OUTPUT_ENCODING,
+            errors="replace",
+        )
     except subprocess.TimeoutExpired as exc:
         # Every other shell-out in this package converts a timeout into a
         # ToolError; without this a 120 s pdftoppm on a huge page reaches the

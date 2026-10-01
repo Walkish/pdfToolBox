@@ -10,7 +10,7 @@ art stays vector.
 from typing import Dict, Iterable, List, Tuple
 
 from pypdf import PageObject, Transformation
-from pypdf.generic import NameObject, RectangleObject
+from pypdf.generic import FloatObject, NameObject, RectangleObject
 
 Size = Tuple[float, float]
 
@@ -22,19 +22,23 @@ _SAME_SIZE_TOLERANCE = 0.5
 _BOX_NAMES = ("/MediaBox", "/CropBox", "/TrimBox", "/BleedBox", "/ArtBox")
 
 
-def visible_size(page: PageObject) -> Size:
-    """The page's size as displayed, in points.
+def _visible_box(page: PageObject) -> RectangleObject:
+    """The box viewers and printers show: the CropBox, else the MediaBox.
 
-    The CropBox is what viewers and printers show; the MediaBox describes the
-    physical medium, and a page with an A4 MediaBox and a smaller CropBox
-    presents at the smaller size. /CropBox is read straight out of the page
-    dictionary because pypdf's ``cropbox`` property writes the key as a side
-    effect of being read -- measured, that alone grows a one-page merge from
-    729 to 754 bytes, which would break the byte-identity guarantee that
-    untouched batches carry.
+    The MediaBox describes the physical medium, and a page with an A4
+    MediaBox and a smaller CropBox presents at the smaller size. /CropBox is
+    read straight out of the page dictionary because pypdf's ``cropbox``
+    property writes the key as a side effect of being read -- measured, that
+    alone grows a one-page merge from 729 to 754 bytes, which would break the
+    byte-identity guarantee that untouched batches carry.
     """
     raw = page.get("/CropBox")
-    box = page.mediabox if raw is None else RectangleObject(raw.get_object())
+    return page.mediabox if raw is None else RectangleObject(raw.get_object())
+
+
+def visible_size(page: PageObject) -> Size:
+    """The page's size as displayed, in points."""
+    box = _visible_box(page)
     width = float(box.width)
     height = float(box.height)
     # A page carrying /Rotate 90 with a 595x842 box is displayed as 842x595.
@@ -72,6 +76,22 @@ def dominant_size(pages: Iterable[PageObject]) -> Size:
     return winner[1]
 
 
+def _clip_to(page: PageObject, left: float, bottom: float, width: float, height: float) -> None:
+    """Clip the page's content to a rectangle, in its own coordinates.
+
+    A crop hides content only while the CropBox is in force, and fitting
+    replaces every box with the target. When the target's shape differs from
+    the crop's, the margins either side of the fitted page would then show
+    what the crop used to hide -- so the crop becomes a clipping path first.
+    """
+    contents = page.get_contents()
+    if contents is None:
+        return
+    rectangle = [FloatObject(value) for value in (left, bottom, width, height)]
+    contents.operations = [([], b"q"), (rectangle, b"re"), ([], b"W"), ([], b"n")] + contents.operations + [([], b"Q")]
+    page.replace_contents(contents)
+
+
 def fit_page(page: PageObject, target: Size) -> None:
     """Scale and centre ``page`` into ``target``, mutating it in place.
 
@@ -95,11 +115,16 @@ def fit_page(page: PageObject, target: Size) -> None:
     # the geometry the reader sees rather than about a rotation the viewer
     # applies afterwards.
     page.transfer_rotation_to_content()
-    box = page.mediabox
+    # The visible box, not the MediaBox: it is what was measured above, and
+    # fitting the MediaBox instead would throw a crop away and show the
+    # content it hid.
+    box = _visible_box(page)
     left = float(box.left)
     bottom = float(box.bottom)
     width = float(box.width)
     height = float(box.height)
+    if "/CropBox" in page:
+        _clip_to(page, left, bottom, width, height)
 
     # Move the box origin to (0, 0) first: a MediaBox does not have to start
     # there, and scaling about the wrong origin slides the content off-page.

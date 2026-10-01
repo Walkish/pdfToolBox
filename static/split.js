@@ -12,7 +12,7 @@
    uploaded document, one-based, which is what the server addresses and what
    the user sees on the tile. Position in the array is the new order; the
    number never changes with it. */
-var SPLIT = { jobId: null, name: null, pageCount: 0, pages: [] };
+var SPLIT = { jobId: null, name: null, pageCount: 0, pages: [], busy: false, checking: false };
 
 function splitPageUrl(number, extension, query) {
   return "/api/split/" + SPLIT.jobId + "/pages/" + number + extension + (query || "");
@@ -31,6 +31,22 @@ function splitStatus(message) {
   var note = byId("split-status");
   note.textContent = message || "";
   note.hidden = !message;
+}
+
+/* A thumbnail that fails to load is the first sign that the session may
+   have expired -- reordering never touches the server, so nothing else
+   would notice. One HEAD request tells an expired session (404) apart from
+   a page that merely failed to render. */
+function checkSplitSession() {
+  if (SPLIT.jobId === null || SPLIT.checking) { return; }
+  SPLIT.checking = true;
+  fetch(splitPageUrl(1, ".png"), { method: "HEAD" }).then(function (response) {
+    if (response.status === 404) { splitExpired(); }
+  }).catch(function () {
+    // The server is unreachable; nothing to clear until it answers.
+  }).then(function () {
+    SPLIT.checking = false;
+  });
 }
 
 /* A session that is gone takes the document with it: every page URL now
@@ -78,7 +94,9 @@ function renderSplitPages() {
   SPLIT.pages.forEach(function (page, index) {
     grid.appendChild(pageTile(page, index));
   });
-  byId("split-run").disabled = SPLIT.pages.length === 0;
+  // Not while a build is in flight: every arrow press re-renders, and a
+  // re-enabled button would let the same build be sent twice.
+  byId("split-run").disabled = SPLIT.busy || SPLIT.pages.length === 0;
   byId("split-reset").hidden = SPLIT.jobId === null ||
     (SPLIT.pages.length === SPLIT.pageCount && isOriginalOrder());
 }
@@ -104,7 +122,10 @@ function pageTile(page, index) {
   thumb.src = splitPageUrl(page.number, ".png");
   thumb.alt = "Page " + page.number;
   thumb.style.transform = "rotate(" + page.rotation + "deg)";
-  thumb.addEventListener("error", function () { thumb.classList.add("is-empty"); });
+  thumb.addEventListener("error", function () {
+    thumb.classList.add("is-empty");
+    checkSplitSession();
+  });
   frame.appendChild(thumb);
   item.appendChild(frame);
 
@@ -164,6 +185,9 @@ function pageDownloadLink(page) {
   link.textContent = "⤓";
   link.title = "Download this page";
   link.href = splitPageUrl(page.number, ".pdf", "?rotate=" + page.rotation);
+  // A download, not a navigation: if the session has expired the link
+  // answers a JSON 404, and following it would replace the whole page.
+  link.download = "";
   return link;
 }
 
@@ -184,6 +208,7 @@ function runSplit() {
   var results = byId("split-results");
   var zipLink = byId("split-zip");
   var originalLabel = button.textContent;
+  SPLIT.busy = true;
   button.disabled = true;
   button.textContent = "Working…";
   results.innerHTML = "";
@@ -226,6 +251,7 @@ function runSplit() {
     item.textContent = error.message;
     results.appendChild(item);
   }).then(function () {
+    SPLIT.busy = false;
     button.textContent = originalLabel;
     button.disabled = SPLIT.pages.length === 0;
   });

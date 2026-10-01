@@ -1,22 +1,18 @@
-"""Profiling a source PDF before deciding how to compress it.
+"""Measuring the raster images inside a PDF.
 
-The compressor needs to know two things that are not visible from the file
-size: how much raster resolution is actually in there, and whether the document
-is a scan. A scan's image resolution *is* its text resolution, which is the
-only case where compression can render a page illegible.
+The compressor needs to know what is not visible from the file size: how much
+raster resolution is actually in there, and how low it gets on the pages a
+reader has to read. A scan page's image resolution *is* its text resolution,
+which is the only case where compression can render a page illegible.
 
-Scan detection is based on image coverage, not on the presence of a text
+A page counts as a scan page by image coverage, not by the absence of a text
 layer: scan-to-PDF workflows routinely run OCR and embed an invisible text
 layer over the raster page, so "no text" would false-negative on exactly the
-files this module exists to protect. A page is a scan page when a raster
-image covers essentially all of it; a document is a scan when most of its
-pages are scan pages.
+files this module exists to protect.
 """
 
 import dataclasses
-import math
 import re
-import statistics
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -26,7 +22,6 @@ from .errors import ToolError
 
 # Column indices in `pdfimages -list` output.
 _COL_PAGE = 0
-_COL_TYPE = 2
 _COL_WIDTH = 3
 _COL_HEIGHT = 4
 _COL_COLOR = 5
@@ -35,21 +30,10 @@ _COL_X_PPI = 12
 _COL_Y_PPI = 13
 _MIN_COLUMNS = 16
 
-# Below this many characters per page, a document is treated as having no
-# meaningful text layer. This is reported on its own merits (a legibility
-# report is more useful when it also says whether a text layer exists) but
-# no longer gates `is_scan` -- see the module docstring.
-_TEXT_CHARS_PER_PAGE = 10
-
 # An image covering at least this fraction of its page's area is treated as
 # *being* the page, i.e. this page is a raster scan rather than a text page
 # that merely contains an embedded photo or figure.
 SCAN_COVERAGE_THRESHOLD = 0.9
-
-# A document counts as a scan once at least this fraction of its pages are
-# scan pages. A report with one full-page photo is not a scan; a 40-page
-# scanned contract is, even if one page failed to image.
-SCAN_PAGE_FRACTION = 0.8
 
 # `pdfinfo -f 1 -l N` output, one line per page: "Page    3 size:  612 x 792 pts (letter)".
 _PAGE_SIZE_RE = re.compile(r"^Page\s+(\d+)\s+size:\s+([\d.]+)\s*x\s*([\d.]+)\s*pts")
@@ -76,12 +60,7 @@ class ImageInfo:
 class PdfProfile:
     """What we know about a source PDF before compressing it."""
 
-    page_count: int
     images: List[ImageInfo]
-    has_text: bool
-    is_scan: bool
-    min_ppi: Optional[float]
-    median_ppi: Optional[float]
     max_ppi: Optional[float]
 
 
@@ -128,7 +107,13 @@ def _run(args: List[str], path: Path) -> str:
     """Run an external tool and return its stdout, raising ToolError on failure."""
     binary_name = Path(args[0]).name
     try:
-        completed = subprocess.run(args, capture_output=True, text=True, timeout=binaries.TIMEOUT_SECONDS)
+        completed = subprocess.run(
+            args,
+            capture_output=True,
+            timeout=binaries.TIMEOUT_SECONDS,
+            encoding=binaries.OUTPUT_ENCODING,
+            errors="replace",
+        )
     except subprocess.TimeoutExpired as exc:
         raise ToolError(
             "{0} timed out after {1}s on {2}".format(binary_name, binaries.TIMEOUT_SECONDS, path),
@@ -140,14 +125,6 @@ def _run(args: List[str], path: Path) -> str:
             stderr=completed.stderr or completed.stdout,
         )
     return completed.stdout
-
-
-def _page_count(path: Path) -> int:
-    output = _run([binaries.find("pdfinfo"), str(path)], path)
-    for line in output.splitlines():
-        if line.startswith("Pages:"):
-            return _to_int(line.split(":", 1)[1].strip())
-    return 0
 
 
 def _page_sizes(path: Path, page_count: int) -> Dict[int, Tuple[float, float]]:
@@ -185,8 +162,8 @@ def _with_coverage(image: ImageInfo, page_sizes: Dict[int, Tuple[float, float]])
     return dataclasses.replace(image, coverage=(image_width_pt * image_height_pt) / page_area)
 
 
-def _extracted_text(path: Path) -> str:
-    return _run([binaries.find("pdftotext"), str(path), "-"], path)
+def _list_images(path: Path) -> List[ImageInfo]:
+    return parse_pdfimages_list(_run([binaries.find("pdfimages"), "-list", str(path)], path))
 
 
 def scan_floor_ppi(path) -> Optional[float]:
@@ -212,7 +189,7 @@ def scan_floor_ppi(path) -> Optional[float]:
     one with no raster images at all).
     """
     path = Path(path)
-    images = parse_pdfimages_list(_run([binaries.find("pdfimages"), "-list", str(path)], path))
+    images = _list_images(path)
     last_page_with_image = max((image.page for image in images), default=0)
     if last_page_with_image <= 0:
         return None
@@ -229,37 +206,6 @@ def scan_floor_ppi(path) -> Optional[float]:
 
 def profile_pdf(path) -> PdfProfile:
     """Inspect ``path`` and return everything the compressor needs to decide."""
-    path = Path(path)
-    images = parse_pdfimages_list(_run([binaries.find("pdfimages"), "-list", str(path)], path))
-    pages_from_images = max((image.page for image in images), default=0)
-    page_count = _page_count(path) or pages_from_images
-
-    page_sizes = _page_sizes(path, page_count)
-    images = [_with_coverage(image, page_sizes) for image in images]
-
-    text = _extracted_text(path)
-    text_budget = _TEXT_CHARS_PER_PAGE * max(1, page_count)
-    has_text = len(text.strip()) >= text_budget
-
-    ppi_values = sorted(image.ppi for image in images if image.ppi is not None)
-    min_ppi = ppi_values[0] if ppi_values else None
-    max_ppi = ppi_values[-1] if ppi_values else None
-    median_ppi = statistics.median(ppi_values) if ppi_values else None
-
-    # A scan page is one whose raster image covers essentially the whole
-    # page. A document is a scan when most of its pages are scan pages.
-    scan_pages = {
-        image.page for image in images if image.coverage is not None and image.coverage >= SCAN_COVERAGE_THRESHOLD
-    }
-    required_scan_pages = max(1, math.ceil(SCAN_PAGE_FRACTION * page_count))
-    is_scan = page_count > 0 and len(scan_pages) >= required_scan_pages
-
-    return PdfProfile(
-        page_count=page_count,
-        images=images,
-        has_text=has_text,
-        is_scan=is_scan,
-        min_ppi=min_ppi,
-        median_ppi=median_ppi,
-        max_ppi=max_ppi,
-    )
+    images = _list_images(Path(path))
+    ppi_values = [image.ppi for image in images if image.ppi is not None]
+    return PdfProfile(images=images, max_ppi=max(ppi_values) if ppi_values else None)
