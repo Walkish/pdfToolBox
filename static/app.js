@@ -1,16 +1,17 @@
 "use strict";
 
-/* Three tabs, each owning an ordered file list and a results list.
+/* Four tabs, each owning an ordered file list and a results list.
    State is one object per tab; no framework, no build step.
 
-   The fourth tab, Split, lives in split.js: it sends a page order rather than
+   The fifth tab, Split, lives in split.js: it sends a page order rather than
    a list of files, so it does not fit the shape run() below expects. It uses
    byId, humanSize, wireDropZone and resultRow from here. */
 
 var TABS = {
   compress: { files: [], endpoint: "/api/compress", multiResult: true },
   merge: { files: [], endpoint: "/api/merge", multiResult: false },
-  images: { files: [], endpoint: "/api/images", multiResult: false }
+  images: { files: [], endpoint: "/api/images", multiResult: false },
+  pagephoto: { files: [], endpoint: "/api/pagephoto", multiResult: true }
 };
 
 /* Rotation and preview live in maps keyed by the File object itself, not in
@@ -21,10 +22,22 @@ var TABS = {
 var ROTATIONS = new Map();
 var THUMBNAILS = new Map();
 
-/* The images and merge tabs both list files whose names do not say much: one
-   scan looks like another. Compress is left out on purpose -- it neither
-   reorders nor rotates, so its rows have nothing to decide about. */
-function hasThumbnails(tabName) { return tabName === "images" || tabName === "merge"; }
+/* The images, merge and page photo tabs all list files whose names do not say
+   much: one scan looks like another. Compress is left out on purpose -- it
+   neither reorders nor rotates, so its rows have nothing to decide about. */
+function hasThumbnails(tabName) {
+  return tabName === "images" || tabName === "merge" || tabName === "pagephoto";
+}
+
+/* Neither step chosen is nothing to do, so the button waits for one. */
+function pagePhotoStepChosen() {
+  return byId("pagephoto-straighten").checked || byId("pagephoto-transparent").checked;
+}
+
+function canRun(tabName) {
+  if (TABS[tabName].files.length === 0) { return false; }
+  return tabName !== "pagephoto" || pagePhotoStepChosen();
+}
 
 function byId(id) { return document.getElementById(id); }
 
@@ -89,7 +102,7 @@ function renderFileList(tabName) {
     item.appendChild(remove);
     list.appendChild(item);
   });
-  byId(tabName + "-run").disabled = state.files.length === 0;
+  byId(tabName + "-run").disabled = !canRun(tabName);
 }
 
 function thumbnailImage(file) {
@@ -261,6 +274,18 @@ function resultRow(result) {
     }
   }
 
+  if (result.ok && result.image_urls && result.image_urls.length) {
+    var gallery = document.createElement("div");
+    gallery.className = "result-images";
+    result.image_urls.forEach(function (url, position) {
+      var picture = document.createElement("img");
+      picture.src = url;
+      picture.alt = result.name + " — page " + (position + 1);
+      gallery.appendChild(picture);
+    });
+    item.appendChild(gallery);
+  }
+
   if (result.ok && result.preview_url) {
     item.appendChild(previewBlock(result.preview_url));
   }
@@ -352,6 +377,12 @@ function run(tabName) {
     form.append("compress", "1");
     form.append("preset", selectedPreset("merge"));
   }
+  if (tabName === "pagephoto") {
+    if (byId("pagephoto-straighten").checked) { form.append("straighten", "1"); }
+    if (byId("pagephoto-transparent").checked) { form.append("transparent", "1"); }
+    var output = document.querySelector("input[name='pagephoto-output']:checked");
+    form.append("output", output ? output.value : "png");
+  }
 
   fetch(state.endpoint, { method: "POST", body: form }).then(function (response) {
     if (!response.ok) {
@@ -375,7 +406,7 @@ function run(tabName) {
     results.appendChild(item);
   }).then(function () {
     button.textContent = originalLabel;
-    button.disabled = state.files.length === 0;
+    button.disabled = !canRun(tabName);
   });
 }
 
@@ -402,5 +433,11 @@ function run(tabName) {
 
   byId("merge-compress").addEventListener("change", function (event) {
     byId("merge-presets").hidden = !event.currentTarget.checked;
+  });
+
+  ["pagephoto-straighten", "pagephoto-transparent"].forEach(function (id) {
+    byId(id).addEventListener("change", function () {
+      byId("pagephoto-run").disabled = !canRun("pagephoto");
+    });
   });
 }());

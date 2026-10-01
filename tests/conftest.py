@@ -8,6 +8,7 @@ readable and adjustable.
 import random
 import zlib
 
+import numpy as np
 import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageFont
 from pypdf import PdfReader, PdfWriter
@@ -572,3 +573,78 @@ def owner_locked_pdf(vector_pdf_factory, tmp_path):
 def password_protected_pdf(vector_pdf_factory, tmp_path):
     """Encrypted with a real user password, which this tool never has."""
     return _encrypted_pdf(vector_pdf_factory(["SECRET"]), tmp_path / "protected.pdf", "letmein")
+
+
+# The paper colour of the page photo fixtures: a phone photo of a white page
+# is never white, and the background removal must not assume it is.
+PAPER_RGB = (222, 228, 233)
+# Where the page photo fixtures put their coloured picture, and the pale patch
+# inside it that must survive background removal as part of the picture.
+PICTURE_BOX = (1100, 200, 1450, 550)
+PICTURE_HIGHLIGHT_BOX = (1250, 350, 1300, 400)
+
+
+def _page_photo(lines, bend):
+    """A photographed page: text on off-white paper, a coloured picture, and
+    the whole sheet bent so that each line of text bows by ``bend`` pixels."""
+    width, height = 1600, 1200
+    image = Image.new("RGB", (width, height), PAPER_RGB)
+    draw = ImageDraw.Draw(image)
+    font = _font(34)
+    rng = random.Random(6)
+    words = ["leaves", "trees", "sap", "sunlight", "food", "green", "autumn", "the", "of", "carbon", "juicy"]
+    for row in range(lines):
+        # Varied, like real prose: a line repeated verbatim gives every line
+        # the same glyph-shaped wobble, which the fit then reads as a bend.
+        text = " ".join(rng.choice(words) for _ in range(9))
+        draw.text((90, 120 + row * 70), text, fill=(40, 40, 40), font=font)
+    # Drawn after the text, over the right-hand ends of the upper lines.
+    draw.ellipse(PICTURE_BOX, fill=(60, 150, 40))
+    # Pale and unsaturated: on its own it reads as paper, so only the hole
+    # filling keeps it opaque.
+    draw.rectangle(PICTURE_HIGHLIGHT_BOX, fill=(215, 222, 214))
+    if not bend:
+        return image
+    source = np.asarray(image)
+    ys, xs = np.mgrid[0:height, 0:width].astype(np.float32)
+    # A bow plus a tilt, both growing down the page the way a curved sheet
+    # seen at an angle does.
+    shifted = ys - bend * (((xs - width / 2.0) / (width / 2.0)) ** 2) * (0.5 + ys / height) - 0.03 * xs
+    rows = np.clip(np.rint(shifted), 0, height - 1).astype(int)
+    columns = xs.astype(int)
+    bent = source[rows, columns]
+    # Rows pulled in from outside the sheet are filled with paper.
+    bent[(shifted < 0) | (shifted > height - 1)] = PAPER_RGB
+    return Image.fromarray(bent)
+
+
+@pytest.fixture
+def page_photo_layout():
+    """Where the page photo fixtures put things, for tests to look there.
+
+    A fixture rather than an import: conftest is not an importable module to
+    the type checker, and the tests should not depend on it being one.
+    """
+    return {"paper": PAPER_RGB, "picture": PICTURE_BOX, "highlight": PICTURE_HIGHLIGHT_BOX}
+
+
+@pytest.fixture
+def curved_page_photo(tmp_path):
+    path = tmp_path / "page.jpg"
+    _page_photo(lines=12, bend=60).save(str(path), "JPEG", quality=92)
+    return path
+
+
+@pytest.fixture
+def flat_page_photo(tmp_path):
+    path = tmp_path / "flat.png"
+    _page_photo(lines=12, bend=0).save(str(path), "PNG")
+    return path
+
+
+@pytest.fixture
+def picture_only_photo(tmp_path):
+    """A page with no text at all, so there is nothing to straighten by."""
+    path = tmp_path / "picture.png"
+    _page_photo(lines=0, bend=0).save(str(path), "PNG")
+    return path

@@ -13,6 +13,7 @@
   <button class="tab" data-tab="merge" role="tab">Merge</button>
   <button class="tab" data-tab="images" role="tab">Images to PDF</button>
   <button class="tab" data-tab="split" role="tab">Split</button>
+  <button class="tab" data-tab="pagephoto" role="tab">Page photos</button>
 </nav>
 
 <section class="panel is-active" id="panel-compress">
@@ -89,6 +90,31 @@
     <a class="zip" id="split-zip" hidden>Download all pages (.zip)</a>
   </div>
   <ul class="results" id="split-results"></ul>
+</section>
+
+<section class="panel" id="panel-pagephoto">
+  <div class="drop" data-drop="pagephoto">
+    <input type="file" id="pagephoto-input" accept="image/png,image/jpeg,image/webp,image/heic,image/heif" multiple hidden>
+    <p>Drop photos of printed pages here or <button class="link" data-pick="pagephoto-input">choose files</button></p>
+  </div>
+  <p class="hint">Straightening uses the lines of text as a ruler, so a page needs a few lines of text on it. Pages are kept in the order shown; reorder with the arrows.</p>
+  <ul class="filelist" id="pagephoto-list"></ul>
+  <label class="check"><input type="checkbox" id="pagephoto-straighten" checked> Straighten the text</label>
+  <label class="check"><input type="checkbox" id="pagephoto-transparent" checked> Make the background transparent</label>
+  <fieldset class="presets">
+    <legend>Save as</legend>
+    <label><input type="radio" name="pagephoto-output" value="png" checked>
+      <span>PNG files</span><small>One per photo, transparency kept</small></label>
+    <label><input type="radio" name="pagephoto-output" value="pdf">
+      <span>PDF files</span><small>One per photo; a PDF page has no transparency, so the background prints white</small></label>
+    <label><input type="radio" name="pagephoto-output" value="merged">
+      <span>One PDF</span><small>Every photo as a page of a single document</small></label>
+  </fieldset>
+  <div class="actions">
+    <button class="primary" id="pagephoto-run" disabled>Clean up</button>
+    <a class="zip" id="pagephoto-zip" hidden>Download all (.zip)</a>
+  </div>
+  <ul class="results" id="pagephoto-results"></ul>
 </section>
 
 <script src="/static/app.js"></script>

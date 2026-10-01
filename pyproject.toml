@@ -20,6 +20,14 @@ dependencies = [
     "pillow-heif==1.1.1",
     # Imported directly (secure_filename, HTTPException), not just via flask.
     "werkzeug",
+    # Page photos: straightening and background removal are per-pixel array
+    # work that Pillow cannot do at a usable speed. Both pins are the last
+    # releases with cp39 wheels, so like pillow-heif they cannot be raised
+    # while this project stays on 3.9. SciPy rather than OpenCV: see the
+    # module docstring of pdftools/pagephoto.py for the HEIC crash OpenCV
+    # brings with it.
+    "numpy==2.0.2",
+    "scipy==1.13.1",
 ]
 
 [dependency-groups]

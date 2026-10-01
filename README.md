@@ -27,6 +27,7 @@ written, so nothing is re-encoded in the browser first.
 - [Compression levels](#compression-levels)
 - [Matching page sizes when merging](#matching-page-sizes-when-merging)
 - [Splitting a document](#splitting-a-document)
+- [Cleaning up page photos](#cleaning-up-page-photos)
 - [Known limitations](#known-limitations)
 - [Tests](#tests)
 - [Lint and type checks](#lint-and-type-checks)
@@ -283,6 +284,29 @@ do not expect a deliberately sideways page to survive both.
 A session lasts an hour from the last time you touch it. Looking at pages counts
 as touching it, so the clock does not run out while you work; leave the tab for
 longer than that and the tab says the document is no longer open.
+
+## Cleaning up page photos
+
+The **Page photos** tab takes phone photos of printed pages (PNG, JPEG, WebP or
+HEIC, as many as you like) and does either or both of two things to each:
+
+- **Straighten the text.** A page photographed on a desk is curved and seen at
+  an angle, so its lines bow. The lines of text are found and used as a ruler:
+  one smooth correction is fitted that makes all of them horizontal, and the
+  photo is resampled through it. The canvas grows rather than cutting off a
+  heading pulled past the edge. A page with fewer than four lines of text has
+  nothing to measure by and is left as it is, with a warning.
+- **Make the background transparent.** The paper becomes transparent, while
+  text and pictures stay. The paper's colour is measured across the page, so
+  shadows and a colour cast go too. Coloured pictures stay fully opaque,
+  including small pale patches inside them. Very pale, almost white parts at
+  a picture's edge can still be taken for paper.
+
+The results are saved as **PNG files** (one per photo, keeping transparency),
+**PDF files** (one per photo) or **One PDF** (every photo as a page, in the
+order shown). A PDF page has no transparency, so in the PDF options the cleared
+background comes out white. Pages are laid out at the toolbox's 300 dpi
+default, the same as the images tab.
 
 ## Known limitations
 
