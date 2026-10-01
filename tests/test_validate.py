@@ -132,6 +132,14 @@ def test_a_short_name_is_left_alone():
     assert validate.normalize_output_name("report.pdf", "default.pdf") == "report.pdf"
 
 
+def test_another_suffix_can_be_asked_for():
+    assert validate.normalize_output_name("page-clean.png", "page.png", suffix=".png") == "page-clean.png"
+    assert validate.normalize_output_name("", "page.png", suffix=".png") == "page.png"
+    long_name = validate.normalize_output_name("d" * 300 + ".png", "page.png", suffix=".png")
+    assert long_name.endswith(".png")
+    assert len("003_") + len(long_name.encode("utf-8")) <= validate.NAME_MAX_BYTES
+
+
 def test_an_empty_name_falls_back_to_the_default():
     assert validate.normalize_output_name("", "merged.pdf") == "merged.pdf"
     assert validate.normalize_output_name(None, "merged.pdf") == "merged.pdf"

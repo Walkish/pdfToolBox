@@ -50,7 +50,7 @@ def test_index_serves_every_tab(client):
     response = client.get("/")
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    for label in ("Compress", "Merge", "Images", "Split"):
+    for label in ("Compress", "Merge", "Images", "Split", "Page photos"):
         assert label in body
 
 
@@ -878,3 +878,130 @@ def test_the_page_zip_is_named_like_the_pages_inside_it(client, vector_pdf_facto
     )
     response = client.get("/api/split/{0}/pages.zip".format(payload["job_id"]))
     assert "Holiday_Scan-pages.zip" in response.headers["Content-Disposition"]
+
+
+def test_page_photo_endpoint_returns_one_transparent_png_per_photo(client, curved_page_photo, flat_page_photo):
+    payload = client.post(
+        "/api/pagephoto",
+        data={
+            "files": [upload(curved_page_photo, "page 6.jpg"), upload(flat_page_photo, "page 7.png")],
+            "straighten": "1",
+            "transparent": "1",
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    names = [result["name"] for result in payload["results"]]
+    assert names == ["page_6-clean.png", "page_7-clean.png"]
+    for result in payload["results"]:
+        assert result["ok"] is True
+        assert len(result["image_urls"]) == 1
+        assert client.get(result["image_urls"][0]).mimetype == "image/png"
+        response = client.get(result["download_url"])
+        assert response.mimetype == "image/png"
+        with Image.open(io.BytesIO(response.get_data())) as image:
+            assert image.mode == "RGBA"
+    archive = zipfile.ZipFile(io.BytesIO(client.get(payload["zip_url"]).get_data()))
+    assert sorted(archive.namelist()) == names
+
+
+def test_page_photo_endpoint_can_straighten_without_clearing_the_background(client, curved_page_photo):
+    payload = client.post(
+        "/api/pagephoto",
+        data={"files": [upload(curved_page_photo, "page.jpg")], "straighten": "1"},
+        content_type="multipart/form-data",
+    ).get_json()
+    response = client.get(payload["results"][0]["download_url"])
+    with Image.open(io.BytesIO(response.get_data())) as image:
+        assert image.mode == "RGB"
+
+
+def test_page_photo_endpoint_passes_on_the_nothing_to_straighten_warning(client, picture_only_photo):
+    payload = client.post(
+        "/api/pagephoto",
+        data={"files": [upload(picture_only_photo, "picture.png")], "straighten": "1", "transparent": "1"},
+        content_type="multipart/form-data",
+    ).get_json()
+    result = payload["results"][0]
+    assert result["ok"] is True
+    assert len(result["warnings"]) == 1
+
+
+def test_page_photo_endpoint_refuses_a_request_with_no_step_chosen(client, flat_page_photo, job_store):
+    response = client.post(
+        "/api/pagephoto",
+        data={"files": [upload(flat_page_photo, "page.png")]},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    # Refused before any upload was saved, so no job was left for the sweep.
+    assert list(job_store.base_dir.iterdir()) == []
+
+
+def test_page_photo_endpoint_rejects_a_pdf_dressed_as_a_photo(client, vector_pdf_2pages):
+    payload = client.post(
+        "/api/pagephoto",
+        data={"files": [upload(vector_pdf_2pages, "page.jpg")], "transparent": "1"},
+        content_type="multipart/form-data",
+    ).get_json()
+    assert payload["results"][0]["ok"] is False
+
+
+def test_page_photo_endpoint_can_save_each_photo_as_a_pdf(client, curved_page_photo, flat_page_photo):
+    payload = client.post(
+        "/api/pagephoto",
+        data={
+            "files": [upload(curved_page_photo, "a.jpg"), upload(flat_page_photo, "b.png")],
+            "transparent": "1",
+            "output": "pdf",
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    assert [result["name"] for result in payload["results"]] == ["a-clean.pdf", "b-clean.pdf"]
+    for result in payload["results"]:
+        response = client.get(result["download_url"])
+        assert response.mimetype == "application/pdf"
+        assert len(PdfReader(io.BytesIO(response.get_data())).pages) == 1
+
+
+def test_page_photo_endpoint_can_merge_every_photo_into_one_pdf_in_upload_order(
+    client, curved_page_photo, flat_page_photo, picture_only_photo
+):
+    payload = client.post(
+        "/api/pagephoto",
+        data={
+            "files": [
+                upload(curved_page_photo, "first.jpg"),
+                upload(picture_only_photo, "second.png"),
+                upload(flat_page_photo, "third.png"),
+            ],
+            "straighten": "1",
+            "transparent": "1",
+            "output": "merged",
+        },
+        content_type="multipart/form-data",
+    ).get_json()
+    assert len(payload["results"]) == 1
+    result = payload["results"][0]
+    assert result["ok"] is True
+    assert result["name"] == "pages.pdf"
+    assert len(result["image_urls"]) == 3
+    # The picture-only page had nothing to straighten by; the warning names it.
+    assert len(result["warnings"]) == 1
+    assert result["warnings"][0].startswith("second.png: ")
+    document = PdfReader(io.BytesIO(client.get(result["download_url"]).get_data()))
+    assert len(document.pages) == 3
+    # Order is kept: the picture-only page is cropped down to its picture, so
+    # it is by far the shortest, and it must still be the second page.
+    heights = [float(page.mediabox.height) for page in document.pages]
+    assert heights[1] < heights[0] / 2
+    assert heights[1] < heights[2] / 2
+
+
+def test_page_photo_endpoint_rejects_an_unknown_output(client, flat_page_photo, job_store):
+    response = client.post(
+        "/api/pagephoto",
+        data={"files": [upload(flat_page_photo, "page.png")], "transparent": "1", "output": "gif"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert list(job_store.base_dir.iterdir()) == []

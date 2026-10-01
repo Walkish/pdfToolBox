@@ -6,14 +6,15 @@ All real behaviour lives in pdftools/ and is tested without Flask.
 
 import io
 import os
+import shutil
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException
 
-from pdftools import binaries, compress, images, jobs, merge, preview, split, validate
+from pdftools import binaries, compress, images, jobs, merge, pagephoto, preview, split, validate
 
 # Imported from its own module rather than as compress.ToolError: merge,
 # images and preview raise this same class, and naming it after compress
@@ -34,6 +35,10 @@ HOST = "127.0.0.1"
 # "Address already in use" unless the default lands somewhere unlikely to
 # already be taken.
 PORT = 5057
+
+# What the page photo tab saves: a PNG per photo, a PDF per photo, or all of
+# them in one PDF.
+PAGEPHOTO_OUTPUTS = ("png", "pdf", "merged")
 
 
 def resolve_port() -> int:
@@ -287,6 +292,14 @@ def _pages_zip_name(display_name: str) -> str:
     return validate.normalize_output_name("{0}-pages.zip".format(stem), "pages.zip")
 
 
+class _CleanedPage(NamedTuple):
+    """One page photo after cleaning, waiting to be saved in the chosen form."""
+
+    record: Dict
+    result: pagephoto.PageResult
+    image_url: str
+
+
 def _payload(job, results: List[Dict]) -> Dict:
     any_output = any(result["ok"] for result in results)
     return {
@@ -500,6 +513,103 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         results.append(_plain_success(job, index, output_name, destination))
         return jsonify(_payload(job, results))
 
+    @application.route("/api/pagephoto", methods=["POST"])
+    def api_pagephoto():
+        """Straighten and/or clear the background of page photos.
+
+        Saved as one PNG per photo, one PDF per photo, or every photo in one
+        PDF, in upload order. Every cleaned page is also kept as a PNG preview,
+        whatever the output, so the page can show what was done to it.
+        """
+        # Read before any upload is saved, for the same reason api_images
+        # reads its rotations first.
+        straighten_text = request.form.get("straighten") == "1"
+        transparent = request.form.get("transparent") == "1"
+        if not straighten_text and not transparent:
+            abort(400, description="Choose at least one of straighten or transparent background")
+        output = request.form.get("output", "png")
+        if output not in PAGEPHOTO_OUTPUTS:
+            abort(400, description="Output {0!r} is not one of {1}".format(output, ", ".join(PAGEPHOTO_OUTPUTS)))
+        job = store.create()
+        records = _saved_uploads(job, "image")
+        if not records:
+            abort(400, description="No files were uploaded")
+        previews = job.previews / "pagephoto"
+        previews.mkdir(parents=True, exist_ok=True)
+        results = []
+        cleaned = []
+        for record in records:
+            if "error" in record:
+                results.append(_failure(record["name"], record["error"]))
+                continue
+            preview_path = previews / "{0}.png".format(record["position"])
+            try:
+                result = pagephoto.clean_page(
+                    record["path"], preview_path, straighten_text=straighten_text, transparent=transparent
+                )
+            except (ToolError, OSError) as exc:
+                message = _redact(str(exc), (record["path"], record["name"]))
+                results.append(_failure(record["name"], message, getattr(exc, "stderr", "")))
+                continue
+            image_url = "/jobs/{0}/pagephoto/{1}.png".format(job.id, record["position"])
+            cleaned.append(_CleanedPage(record, result, image_url))
+
+        if output == "merged":
+            if cleaned:
+                results.append(_pagephoto_merged(job, cleaned))
+            return jsonify(_payload(job, results))
+
+        suffix = "." + output
+        for entry in cleaned:
+            record = entry.record
+            stem = Path(jobs.safe_display_name(record["name"])).stem or "page"
+            display_name = validate.normalize_output_name(
+                "{0}-clean{1}".format(stem, suffix), "page-clean" + suffix, suffix=suffix
+            )
+            destination = job.outputs / "{0:03d}_{1}".format(record["position"], display_name)
+            try:
+                if output == "png":
+                    shutil.copyfile(str(entry.result.output_path), str(destination))
+                else:
+                    images.images_to_pdf([entry.result.output_path], destination, work_dir=job.root)
+            except (ToolError, ValueError, OSError) as exc:
+                message = _redact(str(exc), (record["path"], record["name"]))
+                results.append(_failure(record["name"], message, getattr(exc, "stderr", "")))
+                continue
+            index = job.add_output(destination, display_name)
+            row = _plain_success(job, index, display_name, destination)
+            row["warnings"] = list(entry.result.warnings)
+            row["image_urls"] = [entry.image_url]
+            results.append(row)
+        return jsonify(_payload(job, results))
+
+    def _pagephoto_merged(job, cleaned: List[_CleanedPage]) -> Dict:
+        """Every cleaned page in one PDF, as a single result row."""
+        output_name = validate.normalize_output_name(request.form.get("output_name", ""), "pages.pdf")
+        destination = job.outputs / output_name
+        try:
+            images.images_to_pdf([entry.result.output_path for entry in cleaned], destination, work_dir=job.root)
+        except (ToolError, ValueError, OSError) as exc:
+            message = _redact(str(exc), *[(entry.record["path"], entry.record["name"]) for entry in cleaned])
+            return _failure(output_name, message, getattr(exc, "stderr", ""))
+        index = job.add_output(destination, output_name)
+        row = _plain_success(job, index, output_name, destination)
+        # A page that could not be straightened is still in the document, so
+        # its warning is kept, said against the photo it belongs to.
+        row["warnings"] = [
+            "{0}: {1}".format(entry.record["name"], warning) for entry in cleaned for warning in entry.result.warnings
+        ]
+        row["image_urls"] = [entry.image_url for entry in cleaned]
+        return row
+
+    @application.route("/jobs/<job_id>/pagephoto/<int:position>.png")
+    def pagephoto_preview(job_id, position):
+        job = _job_or_404(job_id)
+        path = job.previews / "pagephoto" / "{0}.png".format(position)
+        if not path.exists():
+            abort(404, description="No cleaned page at that position")
+        return send_file(str(path), mimetype="image/png")
+
     @application.route("/api/split", methods=["POST"])
     def api_split():
         """Open one document for page-by-page editing.
@@ -709,7 +819,8 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             # so it goes through the same normalization rather than relying
             # on Werkzeug to object to whatever arrives.
             download_name=jobs.safe_display_name(entry["display_name"]),
-            mimetype="application/pdf",
+            # Every tab but page photos writes PDFs; those write PNGs.
+            mimetype="image/png" if entry["path"].suffix.lower() == ".png" else "application/pdf",
         )
 
     @application.route("/jobs/<job_id>/zip")

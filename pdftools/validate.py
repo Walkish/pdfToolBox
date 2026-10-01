@@ -152,8 +152,9 @@ def _clamp_utf8(text: str, max_bytes: int) -> str:
     return ""
 
 
-def normalize_output_name(name: Optional[str], default: str) -> str:
-    """A filesystem-safe ``.pdf`` filename, clamped to fit a 255-byte
+def normalize_output_name(name: Optional[str], default: str, suffix: str = ".pdf") -> str:
+    """A filesystem-safe filename ending in ``suffix`` (``.pdf`` unless told
+    otherwise), clamped to fit a 255-byte
     NAME_MAX even after a caller prefixes it with a 4-byte upload position
     ("003_").
 
@@ -166,8 +167,7 @@ def normalize_output_name(name: Optional[str], default: str) -> str:
     length alone would fail otherwise-legitimate uploads (a Mac filename can
     legally sit right at the OS's own 255-byte limit).
     """
-    candidate = secure_filename(name or "") or secure_filename(default) or "output.pdf"
-    suffix = ".pdf"
+    candidate = secure_filename(name or "") or secure_filename(default) or "output" + suffix
     stem = candidate[: -len(suffix)] if candidate.lower().endswith(suffix) else candidate
     if not stem:
         stem = "output"
