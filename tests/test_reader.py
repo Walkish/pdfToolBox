@@ -3,6 +3,7 @@
 import gc
 
 import pytest
+from pypdf import PdfWriter
 
 from pdftools import reader
 from pdftools.errors import ToolError
@@ -46,3 +47,14 @@ def test_the_pages_outlive_the_reader(vector_pdf_factory):
     pages = reader.read_pages(vector_pdf_factory(["KEPT"]))
     gc.collect()
     assert "KEPT" in pages[0].extract_text()
+
+
+def test_an_aes_256_pdf_with_an_empty_user_password_is_read(vector_pdf_factory, tmp_path):
+    # Acrobat's default for an owner-locked file. pypdf needs the
+    # cryptography package for it; without that, the read fails outright.
+    writer = PdfWriter(clone_from=str(vector_pdf_factory(["A", "B"])))
+    writer.encrypt(user_password="", owner_password="owner", algorithm="AES-256")
+    locked = tmp_path / "locked.pdf"
+    with open(str(locked), "wb") as handle:
+        writer.write(handle)
+    assert len(reader.read_pages(locked)) == 2

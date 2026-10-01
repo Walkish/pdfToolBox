@@ -140,6 +140,14 @@ def test_another_suffix_can_be_asked_for():
     assert len("003_") + len(long_name.encode("utf-8")) <= validate.NAME_MAX_BYTES
 
 
+def test_a_name_in_a_script_secure_filename_drops_falls_back_to_the_default():
+    # Not "pdf.pdf": the suffix's own letters are not a name.
+    assert validate.normalize_output_name("отчёт.pdf", "merged.pdf") == "merged.pdf"
+    assert validate.normalize_output_name("合同.pdf", "merged.pdf") == "merged.pdf"
+    assert validate.safe_stem("отчёт", "document") == "document"
+    assert validate.safe_stem("Café", "document") == "Cafe"
+
+
 def test_an_empty_name_falls_back_to_the_default():
     assert validate.normalize_output_name("", "merged.pdf") == "merged.pdf"
     assert validate.normalize_output_name(None, "merged.pdf") == "merged.pdf"
@@ -194,3 +202,23 @@ def test_a_garbage_heic_is_rejected(tmp_path):
     broken.write_bytes(b"not a heic at all")
     with pytest.raises(validate.ValidationError):
         validate.validate_image_file(broken, "broken.heic")
+
+
+def test_a_png_with_a_damaged_chunk_is_rejected_not_raised(png_rgba, tmp_path):
+    data = bytearray(png_rgba.read_bytes())
+    data[data.index(b"IDAT") + 10] ^= 0xFF  # breaks the chunk's CRC
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(bytes(data))
+    with pytest.raises(validate.ValidationError):
+        validate.validate_image_file(broken, "broken.png")
+
+
+def test_a_multi_picture_jpeg_is_accepted_as_a_jpeg(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "phone.jpg"
+    frames = [Image.new("RGB", (64, 48), colour) for colour in ("red", "blue")]
+    frames[0].save(str(path), "MPO", save_all=True, append_images=frames[1:])
+    with Image.open(str(path)) as image:
+        assert image.format == "MPO"
+    validate.validate_image_file(path, "phone.jpg")

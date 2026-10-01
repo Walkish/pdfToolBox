@@ -11,13 +11,20 @@ from typing import Dict, List
 
 TIMEOUT_SECONDS = 120
 
+# How every tool's output is decoded, passed as ``encoding=OUTPUT_ENCODING,
+# errors="replace"``. Poppler writes UTF-8 whatever the locale, and
+# ``text=True`` alone decodes with the locale's code page, strictly: on a
+# Windows cp1252 or cp1251 console, a Russian title in pdfinfo's output holds
+# bytes those code pages leave undefined, and the UnicodeDecodeError takes the
+# request down. Nothing here parses non-ASCII, so lossy is fine.
+OUTPUT_ENCODING = "utf-8"
+
 # Which package provides each requirement. Two of them come from one package,
 # so the install hint is derived from this rather than repeated per binary.
 _PACKAGES = {
     "gs": "ghostscript",
     "pdfimages": "poppler",
     "pdftoppm": "poppler",
-    "pdftotext": "poppler",
     "pdfinfo": "poppler",
 }
 
@@ -98,7 +105,8 @@ def gs_version() -> str:
     completed = subprocess.run(
         [find("gs"), "--version"],
         capture_output=True,
-        text=True,
         timeout=TIMEOUT_SECONDS,
+        encoding=OUTPUT_ENCODING,
+        errors="replace",
     )
     return completed.stdout.strip()

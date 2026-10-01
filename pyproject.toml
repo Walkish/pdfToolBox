@@ -28,6 +28,10 @@ dependencies = [
     # brings with it.
     "numpy==2.0.2",
     "scipy==1.13.1",
+    # pypdf decrypts AES-256 PDFs (Acrobat's default for owner-locked files)
+    # only with this installed; without it such a file cannot be opened at
+    # all. Pinned like the rest; its abi3 wheels cover 3.9.
+    "cryptography==50.0.2",
 ]
 
 [dependency-groups]

@@ -11,6 +11,7 @@ from typing import List
 from pypdf import PdfWriter
 
 from . import pagesize, reader
+from .errors import ToolError
 
 
 def merge_pdfs(paths: List[Path], dst, normalize_pages: bool = False) -> Path:
@@ -30,14 +31,23 @@ def merge_pdfs(paths: List[Path], dst, normalize_pages: bool = False) -> Path:
         # Opening, decrypting and reporting an unreadable file is shared with
         # the splitter, which asks the same three questions of the same kind
         # of untrusted upload.
-        for page in reader.read_pages(Path(path)):
-            writer.add_page(page)
-    if normalize_pages:
-        # Measured across the whole batch, so this cannot run until every input
-        # has been read.
-        target = pagesize.dominant_size(writer.pages)
-        for page in writer.pages:
-            pagesize.fit_page(page, target)
-    with open(str(dst), "wb") as handle:
-        writer.write(handle)
+        pages = reader.read_pages(Path(path))
+        try:
+            for page in pages:
+                writer.add_page(page)
+        except reader.PDF_FAILURES as exc:
+            raise ToolError("Could not read {0}: {1}".format(Path(path).name, exc)) from exc
+    if not writer.pages:
+        raise ValueError("None of the files has any pages")
+    try:
+        if normalize_pages:
+            # Measured across the whole batch, so this cannot run until every
+            # input has been read.
+            target = pagesize.dominant_size(writer.pages)
+            for page in writer.pages:
+                pagesize.fit_page(page, target)
+        with open(str(dst), "wb") as handle:
+            writer.write(handle)
+    except reader.PDF_FAILURES as exc:
+        raise ToolError("Could not write the merged document: {0}".format(exc)) from exc
     return dst

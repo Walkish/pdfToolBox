@@ -40,12 +40,7 @@ def test_choose_page_prefers_the_first_page_carrying_an_image(scan_pdf_600dpi):
 
 def test_choose_page_falls_back_to_page_one_without_images():
     profile = PdfProfile(
-        page_count=3,
         images=[],
-        has_text=True,
-        is_scan=False,
-        min_ppi=None,
-        median_ppi=None,
         max_ppi=None,
     )
     assert preview.choose_page(profile) == 1

@@ -12,10 +12,11 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps
 
 from .errors import ToolError
 from .merge import merge_pdfs
+from .validate import IMAGE_FAILURES
 
 DEFAULT_IMAGE_DPI = 300
 # Outside this range, embedded dpi metadata is more likely wrong than useful.
@@ -74,6 +75,11 @@ def prepare_image(path, rotation: int = 0) -> Tuple[Image.Image, float]:
                 image = image.transpose(_CLOCKWISE_TRANSPOSE[rotation])
             if image.mode == "CMYK":
                 return image.copy(), dpi
+            if image.mode.startswith("I"):
+                # 16-bit greyscale. A plain convert("RGB") clips every value
+                # above 255 to white, which wipes out nearly the whole
+                # picture; scaled into 8 bits first, it keeps its tones.
+                return image.convert("I").point(lambda value: value / 256).convert("L").convert("RGB"), dpi
             if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
                 # PDF pages have no transparency to fall back on, and the
                 # default fallback would be black.
@@ -88,13 +94,10 @@ def prepare_image(path, rotation: int = 0) -> Tuple[Image.Image, float]:
     # OSError or ValueError, so it needs naming explicitly: without it a
     # bomb-sized image escapes as a bare Pillow exception. validate.py
     # rejects those before they get here, but this module is usable on its
-    # own and must not depend on a caller having validated first.
-    except (
-        UnidentifiedImageError,
-        OSError,
-        ValueError,
-        Image.DecompressionBombError,
-    ) as exc:
+    # own and must not depend on a caller having validated first. The rest
+    # of IMAGE_FAILURES matters even after validation: verify() never parses
+    # EXIF, so a malformed EXIF block first fails in exif_transpose above.
+    except IMAGE_FAILURES + (Image.DecompressionBombError,) as exc:
         raise ToolError("Could not read image {0}: {1}".format(path.name, exc)) from exc
 
 

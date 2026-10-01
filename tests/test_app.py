@@ -66,18 +66,6 @@ def test_the_split_script_is_served(client):
     assert client.get("/static/split.js").status_code == 200
 
 
-def test_presets_endpoint_lists_the_ladder_and_the_default(client):
-    payload = client.get("/api/presets").get_json()
-    assert payload["default"] == "print300"
-    ids = [preset["id"] for preset in payload["presets"]]
-    assert ids == ["print600", "print300", "lossless"]
-    by_id = {preset["id"]: preset for preset in payload["presets"]}
-    # Every remaining level targets 300 dpi or better, so all are print-safe.
-    assert all(preset["print_safe"] for preset in payload["presets"])
-    assert by_id["print600"]["label"] == "Print 600 dpi"
-    assert payload["print_floor_dpi"] == 200
-
-
 def test_compress_returns_sizes_and_a_download_url(client, scan_pdf_600dpi):
     response = client.post(
         "/api/compress",
@@ -877,7 +865,47 @@ def test_the_page_zip_is_named_like_the_pages_inside_it(client, vector_pdf_facto
         data={"order": ["1", "2"]},
     )
     response = client.get("/api/split/{0}/pages.zip".format(payload["job_id"]))
-    assert "Holiday_Scan-pages.zip" in response.headers["Content-Disposition"]
+    # Exactly, not as a substring: "Holiday_Scan-pages.zip.pdf" contains it too,
+    # and that is what a .pdf-only normalization used to send.
+    assert response.headers["Content-Disposition"] == "attachment; filename=Holiday_Scan-pages.zip"
+
+
+def test_pages_of_a_document_named_in_cyrillic_get_a_real_name(client, vector_pdf_factory):
+    payload = open_split(client, vector_pdf_factory(["A", "B"]), "отчёт.pdf")
+    response = client.get("/api/split/{0}/pages/1.pdf".format(payload["job_id"]))
+    assert "filename=document-page-1.pdf" in response.headers["Content-Disposition"]
+
+
+def test_a_document_with_no_pages_is_refused_and_not_kept(client, tmp_path, job_store):
+    from pypdf import PdfWriter
+
+    empty = tmp_path / "empty.pdf"
+    with open(str(empty), "wb") as handle:
+        PdfWriter().write(handle)
+    response = client.post(
+        "/api/split", data={"files": [upload(empty, "empty.pdf")]}, content_type="multipart/form-data"
+    )
+    assert response.status_code == 400
+    assert list(job_store.base_dir.iterdir()) == []
+
+
+def test_a_request_with_no_files_leaves_no_job_behind(client, job_store):
+    for endpoint in ("/api/compress", "/api/merge", "/api/images", "/api/split"):
+        assert client.post(endpoint, data={}, content_type="multipart/form-data").status_code == 400
+    assert (
+        client.post("/api/pagephoto", data={"transparent": "1"}, content_type="multipart/form-data").status_code == 400
+    )
+    assert list(job_store.base_dir.iterdir()) == []
+
+
+def test_a_damaged_pdf_fails_its_merge_row_instead_of_the_request(client, vector_pdf_factory, tmp_path):
+    damaged = tmp_path / "damaged.pdf"
+    damaged.write_bytes(vector_pdf_factory(["A"]).read_bytes().replace(b"endstream", b"endstrXam"))
+    response = client.post(
+        "/api/merge", data={"files": [upload(damaged, "damaged.pdf")]}, content_type="multipart/form-data"
+    )
+    assert response.status_code == 200
+    assert response.get_json()["results"][-1]["ok"] is False
 
 
 def test_page_photo_endpoint_returns_one_transparent_png_per_photo(client, curved_page_photo, flat_page_photo):

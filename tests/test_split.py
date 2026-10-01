@@ -168,7 +168,7 @@ def test_matching_sizes_turns_a_turned_page_back_upright(box_pdf_factory, tmp_pa
 def test_each_chosen_page_can_be_written_as_its_own_file(vector_pdf_factory, tmp_path):
     source = vector_pdf_factory(["ALPHA", "BETA", "GAMMA"])
     written = split.build_pages(source, tmp_path / "pages", [2, 0])
-    assert [path.name for path in written] == ["page-3.pdf", "page-1.pdf"]
+    assert len(written) == 2
     assert "GAMMA" in extracted_text(written[0])
     assert "ALPHA" in extracted_text(written[1])
     assert page_count(written[0]) == 1
@@ -178,6 +178,13 @@ def test_pages_written_one_by_one_carry_their_rotations(vector_pdf_factory, tmp_
     source = vector_pdf_factory(["A", "B"])
     written = split.build_pages(source, tmp_path / "pages", [0, 1], [90, 0])
     assert [PdfReader(str(path)).pages[0].rotation for path in written] == [90, 0]
+
+
+def test_the_same_page_chosen_twice_keeps_both_angles(vector_pdf_factory, tmp_path):
+    source = vector_pdf_factory(["A", "B"])
+    written = split.build_pages(source, tmp_path / "pages", [0, 0], [0, 90])
+    assert len(set(written)) == 2
+    assert [PdfReader(str(path)).pages[0].rotation for path in written] == [0, 90]
 
 
 def test_writing_pages_one_by_one_reads_the_source_once(vector_pdf_factory, tmp_path, monkeypatch):

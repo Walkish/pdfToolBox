@@ -5,6 +5,7 @@ hands untrusted files to Ghostscript, so content is sniffed as well and a
 mislabelled file is rejected before any external tool sees it.
 """
 
+import struct
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,24 @@ _PDF_MAGIC = b"%PDF-"
 # Some real-world PDFs carry a little junk before the header; the spec allows
 # the marker anywhere in the first kilobyte.
 _PDF_MAGIC_WINDOW = 1024
+
+# What Pillow raises on a damaged image besides its own errors. A PNG with one
+# flipped byte fails its CRC check with a bare SyntaxError, and a malformed
+# EXIF block with SyntaxError or struct.error -- measured, more than half of a
+# batch of byte-flipped PNGs, and none of them is an OSError or ValueError.
+IMAGE_FAILURES = (
+    UnidentifiedImageError,
+    OSError,
+    ValueError,
+    SyntaxError,
+    EOFError,
+    struct.error,
+)
+
+# Formats Pillow may report for a file with a given extension, beyond the one
+# named in IMAGE_EXTENSIONS. Most Android and camera JPEGs are multi-picture
+# JPEGs, which Pillow reports as MPO and reads like any other JPEG.
+_ALSO_ACCEPTED = {"JPEG": {"MPO"}}
 
 
 class ValidationError(ValueError):
@@ -113,11 +132,11 @@ def validate_image_file(path, display_name: str) -> None:
         # Far enough over Pillow's own ceiling that it refuses to hand back
         # an image at all, so the exact count never reaches the check below.
         raise ValidationError(_too_many_pixels(display_name, None))
-    except (UnidentifiedImageError, OSError, ValueError):
+    except IMAGE_FAILURES:
         raise ValidationError("{0} is not a readable image".format(display_name))
     if oversized:
         raise ValidationError(_too_many_pixels(display_name, pixels))
-    if actual != expected:
+    if actual != expected and actual not in _ALSO_ACCEPTED.get(expected, ()):
         raise ValidationError("{0} does not match its extension: the file is {1}".format(display_name, actual))
 
 
@@ -152,25 +171,43 @@ def _clamp_utf8(text: str, max_bytes: int) -> str:
     return ""
 
 
+def safe_stem(name: Optional[str], default: str) -> str:
+    """``name`` reduced to characters safe in a filename, or ``default`` when
+    nothing meaningful is left.
+
+    ``secure_filename`` folds accented Latin letters to their bare form and
+    drops every other script outright, so a Cyrillic or Chinese name comes
+    back empty or as bare punctuation ("-page-1", "pdf" from "отчёт.pdf").
+    Measured on exactly those names; anything without a letter or digit left
+    in it is treated as nothing.
+    """
+    stem = secure_filename(name or "")
+    if any(character.isalnum() for character in stem):
+        return stem
+    return default
+
+
 def normalize_output_name(name: Optional[str], default: str, suffix: str = ".pdf") -> str:
     """A filesystem-safe filename ending in ``suffix`` (``.pdf`` unless told
-    otherwise), clamped to fit a 255-byte
-    NAME_MAX even after a caller prefixes it with a 4-byte upload position
-    ("003_").
+    otherwise), clamped to fit a 255-byte NAME_MAX even after a caller
+    prefixes it with a 4-byte upload position ("003_").
 
     ``name`` is untrusted -- a client-supplied upload filename, or the
     ``output_name`` form field, which may be absent entirely, hence Optional --
-    and ``default`` is the fallback used when
-    nothing usable survives sanitizing (e.g. ``"merged.pdf"``). A name that
-    is merely too long is not rejected outright: a truncated stem still
-    identifies the file well enough, and rejecting the whole request over
-    length alone would fail otherwise-legitimate uploads (a Mac filename can
-    legally sit right at the OS's own 255-byte limit).
+    and ``default`` is the fallback used when nothing usable survives
+    sanitizing (e.g. ``"merged.pdf"``). The suffix is taken off before
+    sanitizing, so a name with nothing safe in it falls back to ``default``
+    rather than to the suffix's own letters. A name that is merely too long
+    is not rejected outright: a truncated stem still identifies the file well
+    enough, and rejecting the whole request over length alone would fail
+    otherwise-legitimate uploads (a Mac filename can legally sit right at the
+    OS's own 255-byte limit).
     """
-    candidate = secure_filename(name or "") or secure_filename(default) or "output" + suffix
-    stem = candidate[: -len(suffix)] if candidate.lower().endswith(suffix) else candidate
-    if not stem:
-        stem = "output"
+
+    def without_suffix(text: str) -> str:
+        return text[: -len(suffix)] if text.lower().endswith(suffix) else text
+
+    stem = safe_stem(without_suffix(name or ""), safe_stem(without_suffix(default), "output"))
     budget = NAME_MAX_BYTES - _POSITION_PREFIX_BYTES - len(suffix)
     stem = _clamp_utf8(stem, budget) or "output"
     return stem + suffix

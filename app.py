@@ -60,6 +60,16 @@ def resolve_port() -> int:
         )
 
 
+def _require_uploads() -> None:
+    """A 400 for a request with no files, before any job is made for it.
+
+    Checked first so a refused request leaves nothing on disk for the TTL
+    sweep to find an hour later.
+    """
+    if not request.files.getlist("files"):
+        abort(400, description="No files were uploaded")
+
+
 def _saved_uploads(job, kind: str) -> List[Dict]:
     """Persist uploads into the job's input directory, validating each.
 
@@ -144,11 +154,9 @@ def _failure(name: str, message: str, stderr: str = "") -> Dict:
         "size_after": 0,
         "saved_pct": 0.0,
         "warnings": [],
-        # None, not True: this row produced no output, so "print safe"
-        # does not apply -- a UI iterating rows must not read this as a
-        # positive claim about a file that was never written. Same for the
-        # print floor: nothing was written, so nothing was measured.
-        "print_safe": None,
+        # None, not False: this row produced no output, so nothing was
+        # measured -- a UI iterating rows must not read this as a positive
+        # claim about a file that was never written.
         "below_print_floor": None,
         "download_url": None,
         "preview_url": None,
@@ -157,7 +165,7 @@ def _failure(name: str, message: str, stderr: str = "") -> Dict:
     }
 
 
-def _success(job, index: int, name: str, result: compress.CompressResult, preset: compress.Preset) -> Dict:
+def _success(job, index: int, name: str, result: compress.CompressResult) -> Dict:
     return {
         "index": index,
         "name": name,
@@ -166,7 +174,6 @@ def _success(job, index: int, name: str, result: compress.CompressResult, preset
         "size_after": result.size_after,
         "saved_pct": round(result.saved_ratio * 100.0, 1),
         "warnings": list(result.warnings),
-        "print_safe": preset.print_safe,
         # Measured from the finished file, so the UI can flag the print risk
         # without parsing the warning prose.
         "below_print_floor": result.below_print_floor,
@@ -187,7 +194,6 @@ def _plain_success(job, index: int, name: str, path: Path) -> Dict:
         "size_after": size,
         "saved_pct": 0.0,
         "warnings": [],
-        "print_safe": True,
         # None, not False: no compression ran on this file, so its resolution
         # was never measured and this row makes no claim either way.
         "below_print_floor": None,
@@ -216,21 +222,23 @@ def _requested_rotations(count: int) -> List[int]:
         return [0] * count
     if len(raw) != count:
         abort(400, description="Expected one rotation per file, got {0} for {1}".format(len(raw), count))
-    rotations = []
-    for value in raw:
-        try:
-            rotation = int(value)
-        except ValueError:
-            abort(400, description="Rotation {0!r} is not a number".format(value))
-        if rotation not in images.VALID_ROTATIONS:
-            abort(
-                400,
-                description="Rotation {0} is not one of {1}".format(
-                    rotation, ", ".join(str(valid) for valid in images.VALID_ROTATIONS)
-                ),
-            )
-        rotations.append(rotation)
-    return rotations
+    return [_checked_rotation(value) for value in raw]
+
+
+def _checked_rotation(raw: str) -> int:
+    """One clockwise angle from the client, or a 400 saying what is wrong."""
+    try:
+        rotation = int(raw)
+    except ValueError:
+        abort(400, description="Rotation {0!r} is not a number".format(raw))
+    if rotation not in images.VALID_ROTATIONS:
+        abort(
+            400,
+            description="Rotation {0} is not one of {1}".format(
+                rotation, ", ".join(str(valid) for valid in images.VALID_ROTATIONS)
+            ),
+        )
+    return rotation
 
 
 def _requested_page_numbers(job) -> List[int]:
@@ -257,28 +265,20 @@ def _requested_page_numbers(job) -> List[int]:
     return order
 
 
-def _requested_rotation_argument() -> int:
-    """The single angle on a per-page download link, absent meaning none."""
-    raw = request.args.get("rotate", "0")
-    try:
-        rotation = int(raw)
-    except ValueError:
-        abort(400, description="Rotation {0!r} is not a number".format(raw))
-    if rotation not in split.VALID_ROTATIONS:
-        abort(
-            400,
-            description="Rotation {0} is not one of {1}".format(
-                rotation, ", ".join(str(valid) for valid in split.VALID_ROTATIONS)
-            ),
-        )
-    return rotation
+def _upload_stem(display_name: str, default: str) -> str:
+    """The safe stem of an upload's name, for naming what is made from it.
+
+    Sanitized before anything is appended: a name ``secure_filename`` keeps
+    nothing of (any non-Latin script) would otherwise leave just the
+    appended part, and "отчёт.pdf" would download as "-page-1.pdf".
+    """
+    return validate.safe_stem(Path(jobs.safe_display_name(display_name)).stem, default)
 
 
 def _page_file_name(display_name: str, number: int) -> str:
     """What one page downloads as: the document's name plus its page number."""
-    stem = Path(jobs.safe_display_name(display_name)).stem or "document"
-    fallback = "page-{0}.pdf".format(number)
-    return validate.normalize_output_name("{0}-page-{1}.pdf".format(stem, number), fallback)
+    stem = _upload_stem(display_name, "document")
+    return validate.normalize_output_name("{0}-page-{1}.pdf".format(stem, number), "page-{0}.pdf".format(number))
 
 
 def _pages_zip_name(display_name: str) -> str:
@@ -288,8 +288,8 @@ def _pages_zip_name(display_name: str) -> str:
     ``normalize_output_name`` on their way into the zip, and an archive named
     by a different rule is the one name that escapes it.
     """
-    stem = Path(jobs.safe_display_name(display_name)).stem or "document"
-    return validate.normalize_output_name("{0}-pages.zip".format(stem), "pages.zip")
+    stem = _upload_stem(display_name, "document")
+    return validate.normalize_output_name("{0}-pages.zip".format(stem), "pages.zip", suffix=".zip")
 
 
 class _CleanedPage(NamedTuple):
@@ -335,33 +335,12 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
     def index():
         return send_from_directory(STATIC_FOLDER, "index.html")
 
-    @application.route("/api/presets")
-    def presets():
-        return jsonify(
-            {
-                "default": compress.DEFAULT_PRESET,
-                "print_floor_dpi": compress.PRINT_DPI_FLOOR,
-                "presets": [
-                    {
-                        "id": preset.id,
-                        "label": preset.label,
-                        "print_safe": preset.print_safe,
-                    }
-                    # PRESETS' own insertion order is the ladder's order; a
-                    # hand-written id list here would silently omit a fifth
-                    # preset added later while leaving it selectable.
-                    for preset in compress.PRESETS.values()
-                ],
-            }
-        )
-
     @application.route("/api/compress", methods=["POST"])
     def api_compress():
         preset = _requested_preset()
+        _require_uploads()
         job = store.create()
         records = _saved_uploads(job, "pdf")
-        if not records:
-            abort(400, description="No files were uploaded")
         results = []
         for record in records:
             if "error" in record:
@@ -371,7 +350,9 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             try:
                 result = compress.compress_pdf(record["path"], destination, preset.id)
             except ToolError as exc:
-                message = _redact(str(exc), (record["path"], record["name"]))
+                # The output path too: measuring the finished file can fail,
+                # and that message names the file in the job's directory.
+                message = _redact(str(exc), (record["path"], record["name"]), (destination, record["name"]))
                 results.append(_failure(record["name"], message, exc.stderr))
                 continue
             index = job.add_output(
@@ -379,7 +360,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
                 record["name"],
                 {"source": str(record["path"])},
             )
-            results.append(_success(job, index, record["name"], result, preset))
+            results.append(_success(job, index, record["name"], result))
         return jsonify(_payload(job, results))
 
     @application.route("/api/merge", methods=["POST"])
@@ -393,10 +374,9 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         # uses cannot be None by construction.
         compress_preset = _requested_preset() if request.form.get("compress") == "1" else None
 
+        _require_uploads()
         job = store.create()
         records = _saved_uploads(job, "pdf")
-        if not records:
-            abort(400, description="No files were uploaded")
         results = []
         usable = [record for record in records if "error" not in record]
         for record in records:
@@ -414,7 +394,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
                 normalize_pages=request.form.get("normalize") == "1",
             )
         except (ToolError, ValueError, OSError) as exc:
-            message = _redact(str(exc), *[(record["path"], record["name"]) for record in usable])
+            message = _redact(str(exc), *[(record["path"], record["name"]) for record in usable], (merged, output_name))
             results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
             return jsonify(_payload(job, results))
 
@@ -424,7 +404,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             try:
                 result = compress.compress_pdf(staged, merged, compress_preset.id)
             except (ToolError, OSError) as exc:
-                message = _redact(str(exc), (staged, output_name))
+                message = _redact(str(exc), (staged, output_name), (merged, output_name))
                 results.append(_failure(output_name, message, getattr(exc, "stderr", "")))
                 return jsonify(_payload(job, results))
             # The compressed merge result keeps its pre-compression source
@@ -433,7 +413,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             # preview_url _success advertises 404s for exactly the rows
             # where a legibility warning makes the user want to check.
             index = job.add_output(merged, output_name, {"source": str(staged)})
-            results.append(_success(job, index, output_name, result, compress_preset))
+            results.append(_success(job, index, output_name, result))
         else:
             index = job.add_output(merged, output_name)
             results.append(_plain_success(job, index, output_name, merged))
@@ -480,10 +460,9 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         # preset first: a malformed request must not burn real conversion work
         # and then 400, abandoning an output to the TTL sweep.
         rotations = _requested_rotations(len(request.files.getlist("files")))
+        _require_uploads()
         job = store.create()
         records = _saved_uploads(job, "image")
-        if not records:
-            abort(400, description="No files were uploaded")
         results = []
         usable = [record for record in records if "error" not in record]
         for record in records:
@@ -530,10 +509,9 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         output = request.form.get("output", "png")
         if output not in PAGEPHOTO_OUTPUTS:
             abort(400, description="Output {0!r} is not one of {1}".format(output, ", ".join(PAGEPHOTO_OUTPUTS)))
+        _require_uploads()
         job = store.create()
         records = _saved_uploads(job, "image")
-        if not records:
-            abort(400, description="No files were uploaded")
         previews = job.previews / "pagephoto"
         previews.mkdir(parents=True, exist_ok=True)
         results = []
@@ -562,7 +540,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         suffix = "." + output
         for entry in cleaned:
             record = entry.record
-            stem = Path(jobs.safe_display_name(record["name"])).stem or "page"
+            stem = _upload_stem(record["name"], "page")
             display_name = validate.normalize_output_name(
                 "{0}-clean{1}".format(stem, suffix), "page-clean" + suffix, suffix=suffix
             )
@@ -620,17 +598,23 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         """
         if len(request.files.getlist("files")) > 1:
             abort(400, description="Split works on one document at a time")
+        _require_uploads()
         job = store.create()
         records = _saved_uploads(job, "pdf")
-        if not records:
-            abort(400, description="No files were uploaded")
         record = records[0]
+        # Refused uploads are deleted at once rather than left to the sweep:
+        # a 100 MB document someone retries three times is three copies.
         if "error" in record:
+            store.discard(job)
             abort(400, description=record["error"])
         try:
             count = split.page_count(record["path"])
         except ToolError as exc:
+            store.discard(job)
             abort(400, description=_redact(str(exc), (record["path"], record["name"])))
+        if count == 0:
+            store.discard(job)
+            abort(400, description="{0} has no pages".format(record["name"]))
         job.meta["source"] = record["path"]
         job.meta["name"] = record["name"]
         job.meta["page_count"] = count
@@ -679,7 +663,8 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
     def split_page_download(job_id, number):
         job = _split_job_or_404(job_id)
         _page_or_404(job, number)
-        rotation = _requested_rotation_argument()
+        # The single angle on a per-page download link, absent meaning none.
+        rotation = _checked_rotation(request.args.get("rotate", "0"))
         # Built into a temporary directory rather than into the job: this is
         # one page on its way out of the door, not a result to keep, and two
         # clicks on the same page at different angles must not race over one
@@ -744,7 +729,7 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
         except (ToolError, ValueError, OSError) as exc:
             abort(500, description=_redact(str(exc), (job.meta["source"], job.meta["name"])))
         archive = jobs.zip_files(
-            job.root / "pages.zip",
+            job.new_zip_path(),
             [(_page_file_name(job.meta["name"], index + 1), path) for index, path in zip(selection["order"], written)],
         )
         return send_file(

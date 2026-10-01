@@ -12,6 +12,7 @@ from typing import List, Optional, Sequence
 from pypdf import PageObject, PdfWriter
 
 from . import pagesize, reader
+from .errors import ToolError
 
 # The only angles a page can be turned by. Deliberately not imported from
 # ``images``: that module turns pictures on their way into a PDF and this one
@@ -58,19 +59,24 @@ def _write(
     normalize_pages: bool,
 ) -> Path:
     writer = PdfWriter()
-    for index, rotation in zip(order, rotations):
-        page = writer.add_page(pages[index])
-        if rotation:
-            # Added to the page's own rotation, not set: a scan can arrive
-            # already turned, and setting would silently straighten it.
-            page.rotate(rotation)
-    if normalize_pages:
-        target = pagesize.dominant_size(writer.pages)
-        for page in writer.pages:
-            pagesize.fit_page(page, target)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(dst), "wb") as handle:
-        writer.write(handle)
+    # pypdf resolves a page's objects only when it is copied or written, so a
+    # damaged page that read_pages let through fails here instead.
+    try:
+        for index, rotation in zip(order, rotations):
+            page = writer.add_page(pages[index])
+            if rotation:
+                # Added to the page's own rotation, not set: a scan can arrive
+                # already turned, and setting would silently straighten it.
+                page.rotate(rotation)
+        if normalize_pages:
+            target = pagesize.dominant_size(writer.pages)
+            for page in writer.pages:
+                pagesize.fit_page(page, target)
+        with open(str(dst), "wb") as handle:
+            writer.write(handle)
+    except reader.PDF_FAILURES as exc:
+        raise ToolError("Could not write {0}: {1}".format(dst.name, exc)) from exc
     return dst
 
 
@@ -103,10 +109,10 @@ def build_document(
 def build_pages(src, dest_dir, order: Sequence[int], rotations: Optional[Sequence[int]] = None) -> List[Path]:
     """One single-page PDF per chosen page, written into ``dest_dir``.
 
-    Files are named after the page's own number in ``src`` (one-based), not
-    its position in ``order``: that number is what the user saw next to the
-    page on screen, and unlike a position it does not change when the pages
-    are shuffled. Returned in the order given.
+    Returned in the order given. Files are named by position in ``order``,
+    not by page number: the same page may be chosen twice at two angles, and
+    named by number the second copy would overwrite the first. What the user
+    downloads is named by the caller anyway.
 
     Sizes are never matched here. Fitting measures one page against the rest
     of the batch, and there is no batch when every page is its own document.
@@ -118,7 +124,7 @@ def build_pages(src, dest_dir, order: Sequence[int], rotations: Optional[Sequenc
     order = _checked_order(order, pages)
     dest_dir = Path(dest_dir)
     written = []
-    for index, rotation in zip(order, rotations):
-        destination = dest_dir / "page-{0}.pdf".format(index + 1)
+    for position, (index, rotation) in enumerate(zip(order, rotations)):
+        destination = dest_dir / "{0:04d}.pdf".format(position)
         written.append(_write(pages, [index], [rotation], destination, False))
     return written

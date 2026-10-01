@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from pdftools import compress, images
+from pdftools.errors import ToolError
 
 
 def page_boxes(pdf_path):
@@ -227,3 +228,28 @@ def test_a_heic_yields_a_thumbnail(heic_image):
     # Safari can render this one itself.
     with Image.open(io.BytesIO(images.thumbnail_png(heic_image))) as thumb:
         assert max(thumb.size) <= images.THUMBNAIL_MAX_EDGE
+
+
+def test_a_16_bit_greyscale_image_keeps_its_tones(tmp_path):
+    # Values spread across the whole 16-bit range: clipped to 8 bits rather
+    # than scaled, almost every pixel would come out pure white.
+    gradient = Image.new("I;16", (256, 16))
+    gradient.putdata([x * 256 for x in range(256)] * 16)
+    path = tmp_path / "scan16.png"
+    gradient.save(str(path), "PNG")
+    prepared, _dpi = images.prepare_image(path)
+    assert prepared.mode == "RGB"
+    assert prepared.getpixel((0, 0)) == (0, 0, 0)
+    middle = prepared.getpixel((128, 0))
+    assert isinstance(middle, tuple)
+    assert middle[0] == pytest.approx(128, abs=1)
+
+
+def test_a_jpeg_with_a_malformed_exif_block_is_a_tool_error(jpeg_300dpi, tmp_path):
+    data = jpeg_300dpi.read_bytes()
+    exif = b"Exif\x00\x00" + b"XX*\x00" + b"\x00" * 20  # not a TIFF header
+    segment = b"\xff\xe1" + (len(exif) + 2).to_bytes(2, "big") + exif
+    broken = tmp_path / "broken.jpg"
+    broken.write_bytes(data[:2] + segment + data[2:])
+    with pytest.raises(ToolError):
+        images.prepare_image(broken)

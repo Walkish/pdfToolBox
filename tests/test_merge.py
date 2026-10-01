@@ -4,7 +4,8 @@ import subprocess
 
 import pytest
 from PIL import Image, ImageOps
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject, RectangleObject
 
 from pdftools import compress, merge, pagesize
 from pdftools.errors import ToolError
@@ -171,3 +172,66 @@ def test_a_password_protected_input_is_refused_by_name(password_protected_pdf, t
         merge.merge_pdfs([password_protected_pdf], tmp_path / "merged.pdf")
     assert password_protected_pdf.name in str(excinfo.value)
     assert "password protected" in str(excinfo.value)
+
+
+def test_a_cropped_page_is_fitted_by_what_it_shows(box_pdf_factory, tmp_path):
+    # A letter page cropped to its bottom-left quarter displays at 306x396.
+    # Fitting must scale that quarter up to the 612x792 target, not fit the
+    # untouched MediaBox and throw the crop away.
+    writer = PdfWriter()
+    writer.append(str(box_pdf_factory((612, 792))))
+    writer.pages[0][NameObject("/CropBox")] = RectangleObject((0, 0, 306, 396))
+    cropped = tmp_path / "cropped.pdf"
+    with open(str(cropped), "wb") as handle:
+        writer.write(handle)
+    output = merge.merge_pdfs(
+        [box_pdf_factory((612, 792)), box_pdf_factory((612, 792)), cropped],
+        tmp_path / "merged.pdf",
+        normalize_pages=True,
+    )
+    left, top, right, bottom = ink_bbox(output, 3)
+    # The box starts 61.2 pt in and 79.2 pt up; doubled, 122.4 and 158.4. The
+    # rest of the quarter is box, so the ink runs to the right and top edges.
+    assert left == pytest.approx(122.4, abs=2)
+    assert right == pytest.approx(612, abs=2)
+    assert top == pytest.approx(0, abs=2)
+    assert bottom == pytest.approx(792 - 158.4, abs=2)
+
+
+def test_a_document_with_no_pages_is_refused(tmp_path):
+    empty = tmp_path / "empty.pdf"
+    with open(str(empty), "wb") as handle:
+        PdfWriter().write(handle)
+    with pytest.raises(ValueError):
+        merge.merge_pdfs([empty], tmp_path / "merged.pdf")
+
+
+def test_a_page_whose_content_is_damaged_is_a_tool_error(vector_pdf_factory, tmp_path):
+    # Parses as a document, so read_pages lets it through; the damage only
+    # surfaces when the page's stream is copied.
+    source = vector_pdf_factory(["A"]).read_bytes()
+    damaged = tmp_path / "damaged.pdf"
+    damaged.write_bytes(source.replace(b"endstream", b"endstrXam"))
+    with pytest.raises(ToolError):
+        merge.merge_pdfs([damaged], tmp_path / "merged.pdf")
+
+
+def test_what_a_crop_hid_stays_hidden_in_the_margins(box_pdf_factory, tmp_path):
+    # Cropped to its left half, a letter page shows at 306x792: fitted into a
+    # 612x792 target it keeps its scale and sits centred, 153 pt of margin
+    # either side. The box carried on past the crop's right edge, and with
+    # the crop gone that part would show in the right-hand margin.
+    writer = PdfWriter()
+    writer.append(str(box_pdf_factory((612, 792))))
+    writer.pages[0][NameObject("/CropBox")] = RectangleObject((0, 0, 306, 792))
+    cropped = tmp_path / "cropped.pdf"
+    with open(str(cropped), "wb") as handle:
+        writer.write(handle)
+    output = merge.merge_pdfs(
+        [box_pdf_factory((612, 792)), box_pdf_factory((612, 792)), cropped],
+        tmp_path / "merged.pdf",
+        normalize_pages=True,
+    )
+    left, _top, right, _bottom = ink_bbox(output, 3)
+    assert left == pytest.approx(153 + 61.2, abs=2)
+    assert right == pytest.approx(153 + 306, abs=2)
