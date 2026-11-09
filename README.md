@@ -28,6 +28,7 @@ written, so nothing is re-encoded in the browser first.
 - [Matching page sizes when merging](#matching-page-sizes-when-merging)
 - [Splitting a document](#splitting-a-document)
 - [Cleaning up page photos](#cleaning-up-page-photos)
+- [PDF to JPEG](#pdf-to-jpeg)
 - [Known limitations](#known-limitations)
 - [Tests](#tests)
 - [Lint and type checks](#lint-and-type-checks)
@@ -307,6 +308,20 @@ The results are saved as **PNG files** (one per photo, keeping transparency),
 order shown). A PDF page has no transparency, so in the PDF options the cleared
 background comes out white. Pages are laid out at the toolbox's 300 dpi
 default, the same as the images tab.
+
+## PDF to JPEG
+
+The **PDF to JPEG** tab takes one or more PDFs and gives back every page as its
+own JPEG, rendered by pdftoppm at 300 dpi and quality 90, with no settings to
+choose. Each page is named after its document and its page number
+(`report-page-1.jpg`) and has its own download link; **Download all (.zip)**
+takes every page of every document at once.
+
+To convert only some pages, take them out with the **Split** tab first. Pages
+are rendered one at a time, so a page that will not render fails its own row
+while the rest still convert. Nothing caps the page count or the page size: a
+long document simply takes longer, and a large-format page (A1 and up) comes
+out as a JPEG of 10 MB or more.
 
 ## Known limitations
 

@@ -1,9 +1,9 @@
 "use strict";
 
-/* Four tabs, each owning an ordered file list and a results list.
+/* Five tabs, each owning an ordered file list and a results list.
    State is one object per tab; no framework, no build step.
 
-   The fifth tab, Split, lives in split.js: it sends a page order rather than
+   The Split tab lives in split.js: it sends a page order rather than
    a list of files, so it does not fit the shape run() below expects. It uses
    byId, humanSize, wireDropZone and resultRow from here. */
 
@@ -15,7 +15,8 @@ var TABS = {
   compress: { files: [], endpoint: "/api/compress", busy: false },
   merge: { files: [], endpoint: "/api/merge", busy: false },
   images: { files: [], endpoint: "/api/images", busy: false },
-  pagephoto: { files: [], endpoint: "/api/pagephoto", busy: false }
+  pagephoto: { files: [], endpoint: "/api/pagephoto", busy: false },
+  tojpeg: { files: [], endpoint: "/api/tojpeg", busy: false }
 };
 
 /* Rotation and preview live in maps keyed by the File object itself, not in
@@ -81,7 +82,8 @@ function renderFileList(tabName) {
     item.appendChild(name);
     item.appendChild(size);
 
-    if (tabName !== "compress") {
+    // Compress and PDF-to-JPEG treat each file on its own, so order means nothing.
+    if (tabName !== "compress" && tabName !== "tojpeg") {
       item.appendChild(orderButton(tabName, index, -1, "↑", index === 0));
       item.appendChild(
         orderButton(tabName, index, 1, "↓", index === state.files.length - 1)
