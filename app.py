@@ -275,10 +275,12 @@ def _upload_stem(display_name: str, default: str) -> str:
     return validate.safe_stem(Path(jobs.safe_display_name(display_name)).stem, default)
 
 
-def _page_file_name(display_name: str, number: int) -> str:
+def _page_file_name(display_name: str, number: int, suffix: str = ".pdf") -> str:
     """What one page downloads as: the document's name plus its page number."""
     stem = _upload_stem(display_name, "document")
-    return validate.normalize_output_name("{0}-page-{1}.pdf".format(stem, number), "page-{0}.pdf".format(number))
+    return validate.normalize_output_name(
+        "{0}-page-{1}{2}".format(stem, number, suffix), "page-{0}{1}".format(number, suffix), suffix=suffix
+    )
 
 
 def _pages_zip_name(display_name: str) -> str:
@@ -298,6 +300,9 @@ class _CleanedPage(NamedTuple):
     record: Dict
     result: pagephoto.PageResult
     image_url: str
+
+
+_DOWNLOAD_TYPES = {".png": "image/png", ".jpg": "image/jpeg"}
 
 
 def _payload(job, results: List[Dict]) -> Dict:
@@ -490,6 +495,42 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             return jsonify(_payload(job, results))
         index = job.add_output(destination, output_name)
         results.append(_plain_success(job, index, output_name, destination))
+        return jsonify(_payload(job, results))
+
+    @application.route("/api/tojpeg", methods=["POST"])
+    def api_tojpeg():
+        """Every page of every uploaded PDF as its own JPEG.
+
+        One pdftoppm call per page, so the render timeout applies to a page
+        rather than to a whole document, and a page that will not render
+        fails its own row while the pages around it still convert.
+        """
+        _require_uploads()
+        job = store.create()
+        results = []
+        for record in _saved_uploads(job, "pdf"):
+            if "error" in record:
+                results.append(_failure(record["name"], record["error"]))
+                continue
+            try:
+                count = split.page_count(record["path"])
+            except ToolError as exc:
+                message = _redact(str(exc), (record["path"], record["name"]))
+                results.append(_failure(record["name"], message, exc.stderr))
+                continue
+            for number in range(1, count + 1):
+                name = _page_file_name(record["name"], number, ".jpg")
+                prefix = job.outputs / "{0:03d}_{1:04d}".format(record["position"], number)
+                try:
+                    path = preview.render_page(
+                        record["path"], number, preview.JPEG_DPI, prefix, jpeg_quality=preview.JPEG_QUALITY
+                    )
+                except (ToolError, OSError) as exc:
+                    message = _redact(str(exc), (record["path"], record["name"]))
+                    results.append(_failure(name, message, getattr(exc, "stderr", "")))
+                    continue
+                index = job.add_output(path, name)
+                results.append(_plain_success(job, index, name, path))
         return jsonify(_payload(job, results))
 
     @application.route("/api/pagephoto", methods=["POST"])
@@ -804,8 +845,9 @@ def create_app(job_store: Optional[jobs.JobStore] = None) -> Flask:
             # so it goes through the same normalization rather than relying
             # on Werkzeug to object to whatever arrives.
             download_name=jobs.safe_display_name(entry["display_name"]),
-            # Every tab but page photos writes PDFs; those write PNGs.
-            mimetype="image/png" if entry["path"].suffix.lower() == ".png" else "application/pdf",
+            # Page photos write PNGs and the PDF-to-JPEG tab JPEGs; every
+            # other tab writes PDFs.
+            mimetype=_DOWNLOAD_TYPES.get(entry["path"].suffix.lower(), "application/pdf"),
         )
 
     @application.route("/jobs/<job_id>/zip")

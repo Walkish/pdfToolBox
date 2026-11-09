@@ -15,6 +15,7 @@
   <button class="tab" data-tab="images" role="tab">Images to PDF</button>
   <button class="tab" data-tab="split" role="tab">Split</button>
   <button class="tab" data-tab="pagephoto" role="tab">Page photos</button>
+  <button class="tab" data-tab="tojpeg" role="tab">PDF to JPEG</button>
 </nav>
 
 <section class="panel is-active" id="panel-compress">
@@ -116,6 +117,20 @@
     <a class="zip" id="pagephoto-zip" download hidden>Download all (.zip)</a>
   </div>
   <ul class="results" id="pagephoto-results"></ul>
+</section>
+
+<section class="panel" id="panel-tojpeg">
+  <div class="drop" data-drop="tojpeg">
+    <input type="file" id="tojpeg-input" accept="application/pdf" multiple hidden>
+    <p>Drop PDFs here or <button class="link" data-pick="tojpeg-input">choose files</button></p>
+  </div>
+  <p class="hint">Every page becomes its own JPEG at 300 dpi, named after the document and the page number.</p>
+  <ul class="filelist" id="tojpeg-list"></ul>
+  <div class="actions">
+    <button class="primary" id="tojpeg-run" disabled>Convert</button>
+    <a class="zip" id="tojpeg-zip" download hidden>Download all (.zip)</a>
+  </div>
+  <ul class="results" id="tojpeg-results"></ul>
 </section>
 
 <script src="/static/app.js"></script>

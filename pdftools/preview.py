@@ -58,6 +58,13 @@ THUMBNAIL_MAX_EDGE = 320
 # pixels to work with rather than upsampling a blurry render.
 THUMBNAIL_DPI = 50
 
+# The PDF-to-JPEG tab: 300 dpi is print resolution, so a page converted for
+# printing or for a form that wants images loses nothing a printer would show.
+# Quality 90 keeps text edges clean; the step to 95 roughly doubles the file
+# for no difference visible at 1:1.
+JPEG_DPI = 300
+JPEG_QUALITY = 90
+
 
 def pdf_thumbnail_png(pdf_path, max_edge: int = THUMBNAIL_MAX_EDGE, page: int = 1) -> bytes:
     """PNG bytes of a small preview of one page, the first by default.
@@ -80,13 +87,20 @@ def pdf_thumbnail_png(pdf_path, max_edge: int = THUMBNAIL_MAX_EDGE, page: int = 
     return buffer.getvalue()
 
 
-def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:
-    """Render one page to PNG with pdftoppm and return the written file."""
+def render_page(pdf_path, page: int, dpi: int, out_prefix, jpeg_quality: Optional[int] = None) -> Path:
+    """Render one page with pdftoppm and return the written file.
+
+    PNG by default; a ``jpeg_quality`` renders a JPEG at that quality instead.
+    """
     out_prefix = Path(out_prefix)
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
+    if jpeg_quality is None:
+        image_format, suffix = ["-png"], ".png"
+    else:
+        image_format, suffix = ["-jpeg", "-jpegopt", "quality={0}".format(jpeg_quality)], ".jpg"
     command = [
         binaries.find("pdftoppm"),
-        "-png",
+        *image_format,
         "-r",
         str(dpi),
         "-f",
@@ -115,12 +129,12 @@ def render_page(pdf_path, page: int, dpi: int, out_prefix) -> Path:
             ),
             stderr=str(exc),
         ) from exc
-    # pdftoppm appends ".png" to the prefix string literally -- it does not
-    # replace an existing suffix the way Path.with_suffix does. A prefix
-    # basename containing a dot (e.g. "page.v1") is written as "page.v1.png",
-    # not "page.png", so the expected path must be built with append, not
-    # replace, semantics.
-    output = Path(str(out_prefix) + ".png")
+    # pdftoppm appends ".png" (or ".jpg") to the prefix string literally -- it
+    # does not replace an existing suffix the way Path.with_suffix does. A
+    # prefix basename containing a dot (e.g. "page.v1") is written as
+    # "page.v1.png", not "page.png", so the expected path must be built with
+    # append, not replace, semantics.
+    output = Path(str(out_prefix) + suffix)
     if completed.returncode != 0 or not output.exists():
         raise ToolError(
             "Could not render page {0} of {1}".format(page, Path(pdf_path).name),

@@ -50,7 +50,7 @@ def test_index_serves_every_tab(client):
     response = client.get("/")
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    for label in ("Compress", "Merge", "Images", "Split", "Page photos"):
+    for label in ("Compress", "Merge", "Images", "Split", "Page photos", "PDF to JPEG"):
         assert label in body
 
 
@@ -1033,3 +1033,62 @@ def test_page_photo_endpoint_rejects_an_unknown_output(client, flat_page_photo, 
     )
     assert response.status_code == 400
     assert list(job_store.base_dir.iterdir()) == []
+
+
+def test_tojpeg_turns_every_page_into_a_300_dpi_jpeg(client, vector_pdf_2pages):
+    payload = client.post(
+        "/api/tojpeg",
+        data={"files": [upload(vector_pdf_2pages, "report.pdf")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    assert [result["name"] for result in payload["results"]] == ["report-page-1.jpg", "report-page-2.jpg"]
+    response = client.get(payload["results"][0]["download_url"])
+    assert response.mimetype == "image/jpeg"
+    with Image.open(io.BytesIO(response.data)) as page:
+        assert page.format == "JPEG"
+        # A US Letter page at 300 dpi.
+        assert page.size == (2550, 3300)
+
+
+def test_tojpeg_reports_a_bad_file_and_still_converts_the_good_one(client, vector_pdf_2pages):
+    payload = client.post(
+        "/api/tojpeg",
+        data={"files": [(io.BytesIO(b"PK\x03\x04not a pdf"), "bad.pdf"), upload(vector_pdf_2pages, "good.pdf")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    assert [(result["name"], result["ok"]) for result in payload["results"]] == [
+        ("bad.pdf", False),
+        ("good-page-1.jpg", True),
+        ("good-page-2.jpg", True),
+    ]
+
+
+def test_tojpeg_a_page_that_fails_to_render_does_not_stop_the_rest(client, vector_pdf_2pages, monkeypatch):
+    real_render = app_module.preview.render_page
+
+    def render(pdf_path, page, *args, **kwargs):
+        if page == 1:
+            raise app_module.ToolError("Could not render page 1 of {0}".format(pdf_path.name))
+        return real_render(pdf_path, page, *args, **kwargs)
+
+    monkeypatch.setattr(app_module.preview, "render_page", render)
+    payload = client.post(
+        "/api/tojpeg",
+        data={"files": [upload(vector_pdf_2pages, "doc.pdf")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    first, second = payload["results"]
+    assert first["ok"] is False
+    # The on-disk name ("000_doc.pdf") is redacted back to what was uploaded.
+    assert first["error"] == "Could not render page 1 of doc.pdf"
+    assert second["ok"] is True
+
+
+def test_tojpeg_zip_holds_every_page_of_every_document(client, vector_pdf_2pages, vector_pdf_factory):
+    payload = client.post(
+        "/api/tojpeg",
+        data={"files": [upload(vector_pdf_2pages, "a.pdf"), upload(vector_pdf_factory(["ONLY"]), "b.pdf")]},
+        content_type="multipart/form-data",
+    ).get_json()
+    archive = zipfile.ZipFile(io.BytesIO(client.get(payload["zip_url"]).data))
+    assert sorted(archive.namelist()) == ["a-page-1.jpg", "a-page-2.jpg", "b-page-1.jpg"]
